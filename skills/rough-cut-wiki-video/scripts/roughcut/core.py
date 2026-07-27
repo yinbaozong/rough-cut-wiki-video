@@ -10,6 +10,8 @@ CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 
 START_RE = re.compile(r"^(?:3\s*2\s*1|三\s*二\s*一|321)?\s*(?:开始|走)$", re.I)
 END_RE = re.compile(r"^(?:ok|过|可以|好了|结束)$", re.I)
 ACTION_HINTS = "安装拆卸移除取下连接插入拧紧松开调整校准打开关闭放置固定撕下拔出更换清洁检查"
+STEP_LABEL_PATTERN = r"(?:步骤\s*(?:\d+|[一二三四五六七八九十]+)|step\s*\d+)"
+EXPLICIT_STEP_PATTERN = rf"(?:\d+[.)、]|{STEP_LABEL_PATTERN}\s*[:：.,，]?)"
 
 
 class MissingTakeEvidenceError(RuntimeError):
@@ -49,18 +51,19 @@ def parse_wiki(text: str) -> list[dict]:
     """Conservatively extract ordered action steps from pasted Markdown/plain text."""
     candidates: list[str] = []
     in_table_header = False
-    text = re.sub(r"(?=步骤\s*(?:\d+|[一二三四五六七八九十]+)\s*[：:,，]?)", "\n", text)
+    text = re.sub(rf"(?={STEP_LABEL_PATTERN}\s*[:：,，.]?)", "\n", text, flags=re.I)
     for raw in text.splitlines():
         line = _clean(raw)
         if not line or line.startswith("#") or re.fullmatch(r"[|:\- ]+", line):
             continue
-        line = re.sub(r"^\s*(?:\d+[.)、]|[-*+]\s+|步骤\s*(?:\d+|[一二三四五六七八九十]+)\s*[:：.,，]?)\s*", "", line)
+        explicit_step = bool(re.match(rf"^\s*{EXPLICIT_STEP_PATTERN}", line, re.I))
+        line = re.sub(rf"^\s*(?:{EXPLICIT_STEP_PATTERN}|[-*+]\s+)\s*", "", line, flags=re.I)
         if not line:
             continue
         # Avoid promoting tool lists and generic warnings to timeline steps.
         if re.match(r"^(?:注意|警告|提示|准备|工具|所需物品)[:：]", line):
             continue
-        if any(ch in line for ch in ACTION_HINTS):
+        if explicit_step or any(ch in line for ch in ACTION_HINTS):
             candidates.append(line)
     return [
         {

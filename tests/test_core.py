@@ -42,6 +42,21 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(steps), 3)
         self.assertEqual(steps[1]["wiki_text"], "移除一颗螺丝,小心移除背板。")
 
+    def test_explicit_generic_tutorial_steps_do_not_require_repair_verbs(self):
+        steps = parse_wiki(
+            "Step 1: Whisk the eggs until smooth.\n"
+            "Step 2: Pour the mixture slowly into the pan.\n"
+            "Step 3: Fold the pancake carefully without tearing it."
+        )
+        self.assertEqual(
+            [step["wiki_text"] for step in steps],
+            [
+                "Whisk the eggs until smooth.",
+                "Pour the mixture slowly into the pan.",
+                "Fold the pancake carefully without tearing it.",
+            ],
+        )
+
     def test_filename_parts_and_camera_names(self):
         self.assertEqual(parse_filename(Path("安装侧板_第2段.mov"))["part_number"], 2)
         self.assertEqual(parse_filename(Path("安装侧板二.mp4"))["part_number"], 2)

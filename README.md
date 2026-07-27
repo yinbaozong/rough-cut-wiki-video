@@ -4,9 +4,9 @@
 
 [![Tests](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml/badge.svg)](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml)
 
-`rough-cut-wiki-video` is a portable Agent Skill that turns a folder of MP4/MOV footage and a Markdown maintenance guide into an editable instructional-video rough cut. It is designed for 3D-printer assembly, maintenance, troubleshooting, unboxing, and similar step-by-step tutorials.
+`rough-cut-wiki-video` is a portable Agent Skill that turns a folder of MP4/MOV footage and an ordered procedure into an editable tutorial-video rough cut. It works across step-by-step content such as assembly and repair, crafts, cooking, product demonstrations, workplace procedures, training, unboxing, and other practical how-to videos. It is not tied to 3D printing or any single subject.
 
-The Skill analyzes spoken take markers, short spoken step labels, filenames, Wiki order, optional OCR, and media timing. It keeps the original 4K files untouched and produces an edit plan, editable captions, SRT, FCPXML, a review preview, and—on Windows—a native encrypted Jianying/CapCut China desktop draft with real source cut points.
+The Skill analyzes spoken take markers, short spoken step labels, filenames, procedure order, optional OCR, and media timing. It keeps the original 4K files untouched and produces an edit plan, editable captions, SRT, FCPXML, a review preview, and—on Windows—a native encrypted Jianying/CapCut China desktop draft with real source cut points.
 
 ## Contents
 
@@ -16,7 +16,7 @@ The Skill analyzes spoken take markers, short spoken step labels, filenames, Wik
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [How to record footage](#how-to-record-footage)
-- [How to prepare the Wiki Markdown](#how-to-prepare-the-wiki-markdown)
+- [How to provide the procedure](#how-to-provide-the-procedure)
 - [Matching and edit rules](#matching-and-edit-rules)
 - [Jianying 10/11 editable drafts](#jianying-1011-editable-drafts)
 - [Final Cut Pro workflow](#final-cut-pro-workflow)
@@ -33,13 +33,13 @@ The Skill analyzes spoken take markers, short spoken step labels, filenames, Wik
 - Removes isolated end markers such as `OK`, `过`, `可以`, `好了`, and `结束`.
 - Does not confuse normal phrases such as `开始拆卸` or `可以安装` with take markers.
 - Splits multiple takes recorded in one file.
-- Can split adjacent Wiki steps when the speaker says `下一步，移除支架`.
-- Matches short labels such as `安装侧板` or `移除支架` to more detailed Wiki steps.
-- Orders clips by Wiki step, explicit part number, and recording time.
+- Can split adjacent procedure steps when the speaker says `下一步，移除支架`.
+- Matches short labels such as `安装侧板` or `移除支架` to more detailed written steps.
+- Orders clips by procedure step, explicit part number, and recording time.
 - Keeps repeated takes instead of silently choosing one.
-- Generates polished teaching captions from Wiki facts, not from casual spoken wording.
+- Generates polished teaching captions from the supplied procedure, not from casual spoken wording.
 - Creates separate `文档字幕` and `待确认` text tracks.
-- Keeps unmatched footage at the end and reports missing Wiki steps.
+- Keeps unmatched footage at the end and reports missing procedure steps.
 - Preserves the original audio and references the original MP4/MOV files.
 
 ## Supported platforms
@@ -106,8 +106,20 @@ The most convenient workflow is to ask your agent:
 
 ```text
 Use rough-cut-wiki-video.
-Footage: E:\My shoot
-Wiki file: E:\My shoot\guide.md
+Footage: E:\My tutorial footage
+Procedure:
+Step 1: Open the cover carefully and keep the cable clear.
+Step 2: Press the latch and remove the old module vertically.
+Step 3: Align the replacement module, insert it gently, and close the latch.
+Create an editable rough cut and a Jianying draft.
+```
+
+You can paste the ordered steps directly into the conversation, as above. A local plain-text or Markdown file is also accepted:
+
+```text
+Use rough-cut-wiki-video.
+Footage: E:\My tutorial footage
+Procedure file: E:\My tutorial footage\steps.txt
 Create an editable rough cut and a Jianying draft.
 ```
 
@@ -117,30 +129,30 @@ You can also run the analyzer directly:
 $Skill = "$HOME\.agents\skills\rough-cut-wiki-video"
 & "$Skill\.venv\Scripts\python.exe" "$Skill\scripts\roughcut.py" run `
   --media "E:\My shoot\footage" `
-  --wiki "E:\My shoot\guide.md" `
+  --wiki "E:\My tutorial footage\steps.txt" `
   --output "E:\My shoot\rough-cut-output" `
   --mode auto `
   --preview
 ```
 
-The Wiki input is a local Markdown file. It may be an exported Wiki page or text copied into an `.md` file; web scraping is not required.
+When text is pasted into the conversation, the agent saves it unchanged as UTF-8 `wiki-source.md` inside the job before running the command. Direct CLI use still accepts a file through `--wiki`; that file may be `.txt`, `.md`, or another UTF-8 text export. Web scraping is not required.
 
 ## How it works
 
 The automatic pipeline is intentionally evidence-driven:
 
-1. **Read the Wiki:** parse ordered actions, part names, quantities, branches, tools, directions, and safety notes from the Markdown file.
+1. **Read the procedure:** accept steps pasted into the conversation or loaded from a UTF-8 text/Markdown file, then parse the ordered filmed actions, names, quantities, directions, and step-specific cautions.
 2. **Probe every media file:** use ffprobe to record duration, audio presence, frame size, and stream information. Every discovered MP4/MOV must enter the plan or an actionable report.
 3. **Extract audio first:** in `auto` mode, FFmpeg creates a temporary mono 16 kHz WAV track. The original video is never changed.
 4. **Transcribe locally:** faster-whisper `small` produces multilingual word timestamps. Start/end markers define source cut points and the short post-start phrase becomes the spoken step label.
-5. **Check Wiki relevance:** the spoken label is scored against every Wiki step. Empty speech, filler, or speech unrelated to the Wiki is rejected as matching evidence.
-6. **Use the filename only when needed:** if no Wiki-related spoken label exists, parse the filename for an action, part name, sequence, and part number, then score that label against the Wiki.
-7. **Stop instead of guessing:** if neither speech nor filename relates to the Wiki, list the affected files and ask the user to record a spoken step label or rename them. Wiki order and OCR are not allowed to hide missing primary evidence.
-8. **Build the timeline:** select source in/out ranges, order clips by Wiki step and part number, preserve repeated takes, and add review markers for conflicts.
-9. **Write captions and exports:** generate Wiki-grounded captions, SRT, FCPXML, JSON checkpoints, and an optional review preview.
+5. **Check procedure relevance:** the spoken label is scored against every written step. Empty speech, filler, or speech unrelated to the procedure is rejected as matching evidence.
+6. **Use the filename only when needed:** if no procedure-related spoken label exists, parse the filename for an action, object, sequence, and part number, then score that label against the procedure.
+7. **Stop instead of guessing:** if neither speech nor filename relates to the procedure, list the affected files and ask the user to record a spoken step label or rename them. Procedure order and OCR are not allowed to hide missing primary evidence.
+8. **Build the timeline:** select source in/out ranges, order clips by procedure step and part number, preserve repeated takes, and add review markers for conflicts.
+9. **Write captions and exports:** generate procedure-grounded captions, SRT, FCPXML, JSON checkpoints, and an optional review preview.
 10. **Create editor-native projects:** Final Cut Pro uses FCPXML. Windows Jianying uses a separate encrypted-draft and homepage-registration stage.
 
-This design prevents a silent but dangerous failure mode: arranging unlabeled footage purely because it happened to be recorded near a Wiki step.
+This design prevents a silent but dangerous failure mode: arranging unlabeled footage purely because it happened to be recorded near a written step.
 
 ## How to record footage
 
@@ -176,14 +188,14 @@ If one file contains two adjacent actions, say a short transition before the nex
 
 ### What to say
 
-Use only the Wiki-level action name and an optional part number:
+Use only the procedure-level action name and an optional part number:
 
 - `安装背板，第1段`
-- `移除背板`
-- `打开卡扣，移除热端`
-- `连接 AMS 电缆`
+- `搅拌面糊`
+- `折叠纸张，第2段`
+- `包装产品`
 
-You do not need to narrate every hand movement. The Skill expands the final caption from the Wiki.
+You do not need to narrate every hand movement. The Skill expands the final caption from the supplied procedure.
 
 ### What to avoid
 
@@ -198,54 +210,42 @@ You do not need to narrate every hand movement. The Skill expands the final capt
 If speech recognition is unavailable or you prefer silent recording, rename files approximately like this:
 
 ```text
-010_安装侧板_01.mov
-010_安装侧板_02.mov
-020_移除支架_01.mp4
+010_准备面糊_01.mov
+010_准备面糊_02.mov
+020_倒入模具_01.mp4
 ```
 
-The label can be short. The agent matches it semantically to the detailed Wiki step. Explicit part numbers are sorted before recording time.
+The label can be short. The agent matches it semantically to the detailed written step. Explicit part numbers are sorted before recording time.
 
-## How to prepare the Wiki Markdown
+## How to provide the procedure
 
-The Wiki is the factual source for captions. Spoken labels are evidence for matching only.
+The procedure—whether pasted into the conversation or supplied as a file—is the factual source for captions. Spoken labels are evidence for matching only.
 
 ### Recommended structure
 
-```markdown
-# Replace the hotend
-
-## Tools and preparation
-
-- H2.0 hex key
-- Power off the printer and allow the hotend to cool.
-
-## Procedure
-
-1. Remove one screw and carefully remove the rear cover.
-2. Open the latch and remove the hotend.
-3. Place the replacement hotend in position and close the latch.
-4. Install and tighten the screw.
-
-## Configuration branch: AMS installed
-
-1. Disconnect the AMS cable before removing the rear cover.
-
-> Warning: Do not touch the hotend until it has cooled.
+```text
+Step 1: Remove the retaining screw, then carefully lift the cover without pulling the cable.
+Step 2: Open the latch and remove the old module vertically.
+Step 3: Align the replacement module, place it gently, and close the latch.
+Step 4: Reinstall and tighten the retaining screw.
 ```
 
-### Wiki rules
+Chinese markers such as `步骤一`, `步骤二`, and `步骤三`, or a normal numbered list such as `1.`, `2.`, and `3.`, work equally well.
 
-- Use an ordered list for actions that should appear on the timeline.
+### Procedure rules
+
+- Include only actions that were filmed and should appear on the timeline.
+- Write the steps in the intended viewing order: Step 1, Step 2, Step 3, and so on.
 - Keep one main action per numbered step. Several tightly coupled motions may stay together.
-- State exact part names, quantities, tool sizes, directions, and warnings.
-- Put tools, preparation, and safety notes under their own headings; they are caption facts, not automatic footage steps.
-- Mark mutually exclusive product/configuration branches with clear headings.
-- Use image alt text or a short description when an image contains useful visual evidence.
+- State useful names, quantities, directions, and cautions in the step where they matter.
+- You do not need separate tools, preparation, background, introduction, or theory sections when those items were not filmed. They are not timeline steps.
+- Put an essential warning into the relevant action, for example: “carefully lift the cover without pulling the cable.”
+- If a tutorial has alternative paths, provide only the path shown in this footage, or clearly label each filmed branch.
 - Avoid references such as “do this” or “install it” when the part name can be stated.
 - Do not add unsupported marketing claims or safety conclusions.
-- Save as UTF-8 Markdown. Chinese paths and content are supported.
+- Paste plain text directly, or provide a UTF-8 `.txt`, `.md`, or exported Wiki text file. Chinese paths and content are supported.
 
-The agent may improve sentence flow for reading, but it must not invent parts, counts, values, directions, or safety claims that are absent from the Wiki.
+The agent may improve sentence flow for reading, but it must not invent objects, ingredients, parts, counts, values, directions, or safety claims that are absent from the supplied procedure.
 
 ## Matching and edit rules
 
@@ -357,7 +357,7 @@ python scripts/roughcut.py doctor --json
 ```text
 roughcut.py run
   --media PATH
-  --wiki FILE.md
+  --wiki PROCEDURE_FILE
   --output PATH
   [--mode auto|filename]
   [--model small]
@@ -398,12 +398,12 @@ output/
 └── review-preview.mp4
 ```
 
-- `wiki-source.md`: exact saved Wiki input.
+- `wiki-source.md`: exact saved procedure input, whether it was pasted or loaded from a file.
 - `wiki-steps.json`: normalized action steps and caption facts.
 - `takes.json`: media probes, labels, timestamps, OCR evidence, and warnings.
 - `edit-plan.json`: application-independent source ranges, ordering, captions, and match status.
 - `review.md`: missing steps, ambiguous clips, fallbacks, and timeline summary.
-- `wiki-subtitles.srt`: formal Wiki-derived captions.
+- `wiki-subtitles.srt`: formal procedure-derived captions.
 - `review-subtitles.srt`: `待确认` markers.
 - `timeline.fcpxml`: editable interchange for Final Cut Pro and compatible editors.
 - `review-preview.mp4`: optional 720p review render; not the editable master.
