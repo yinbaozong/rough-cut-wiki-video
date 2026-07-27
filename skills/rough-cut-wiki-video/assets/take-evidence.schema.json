@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/rough-cut-wiki-video/take-evidence.schema.json",
+  "title": "TakeEvidence", "type": "object",
+  "required": ["source_file", "duration"],
+  "properties": {
+    "source_file": {"type": "string"}, "duration": {"type": "number", "minimum": 0},
+    "in": {"type": "number", "minimum": 0}, "out": {"type": "number", "minimum": 0},
+    "spoken_label": {"type": ["string", "null"]}, "has_audio": {"type": "boolean"},
+    "ocr_text": {"type": ["string", "null"]},
+    "end_reason": {"enum": ["spoken_cue", "next_start", "next_step", "file_end", "no_speech"]},
+    "transcript_words": {"type": "array", "items": {"type": "object"}}
+  }, "additionalProperties": true
+}

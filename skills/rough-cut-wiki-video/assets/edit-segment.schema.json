@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/rough-cut-wiki-video/edit-segment.schema.json",
+  "title": "EditSegment", "type": "object",
+  "required": ["source_file", "source_in", "source_out", "status", "captions", "review_caption"],
+  "properties": {
+    "source_file": {"type": "string"}, "source_in": {"type": "number"}, "source_out": {"type": "number"},
+    "wiki_step_id": {"type": ["string", "null"]}, "wiki_order": {"type": "integer"},
+    "part_number": {"type": ["integer", "null"]}, "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "status": {"enum": ["matched", "ambiguous", "unmatched"]},
+    "captions": {"type": "array", "items": {"type": "string"}},
+    "review_caption": {"type": "array", "items": {"type": "string"}},
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "selected_source": {"type": ["string", "null"], "enum": ["manual", "spoken", "filename", null]},
+        "needs_user_input": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    }
+  }, "additionalProperties": true
+}

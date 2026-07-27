@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wiki Video Rough Cut"
+  short_description: "Build editable Wiki-guided video and Jianying rough cuts"
+  default_prompt: "Use $rough-cut-wiki-video to turn my Markdown Wiki and footage folder into an editable rough cut and Jianying project."

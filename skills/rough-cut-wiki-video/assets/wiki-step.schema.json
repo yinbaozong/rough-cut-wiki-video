@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/rough-cut-wiki-video/wiki-step.schema.json",
+  "title": "WikiStep",
+  "type": "object",
+  "required": ["id", "order", "wiki_text", "caption_text", "keywords", "notes"],
+  "properties": {
+    "id": {"type": "string"}, "order": {"type": "integer", "minimum": 1},
+    "branch": {"type": ["string", "null"]}, "wiki_text": {"type": "string"},
+    "caption_text": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}
