@@ -30,7 +30,7 @@ Turn an ordered procedure and a footage folder into a non-destructive tutorial r
 
 ## Evidence Rules
 
-Use this priority: user corrections; procedure-related post-start spoken label; meaningful filename and part number; procedure order/OCR/visual context for review only. A camera filename such as `DJI_0001` is not a label. If speech is empty or unrelated to every procedure step, try the filename. If neither provides procedure-related evidence, stop instead of guessing and ask the user to record a spoken step label or rename the file. Preserve repeated takes and order explicit parts before recording time. Put other unmatched material at the timeline end and list unshot procedure steps only in the report.
+Use this priority: user corrections; procedure-related post-start spoken label; meaningful filename and part number; procedure order/OCR/visual context for review only. A camera filename such as `DJI_0001` is not a label. If speech is empty or unrelated to every procedure step, try the filename. If neither provides procedure-related evidence, never guess and never rename the original media: preserve the whole clip at the timeline end, set `status: unmatched`, use display name `待确认（reason）— original-name`, add exact review text `待确认`, and explain the missing evidence in `review.md`. Continue exporting the other footage. Preserve repeated takes and order explicit parts before recording time. List unshot procedure steps only in the report.
 
 Start cues are `321开始`, `三二一开始`, `321走`, or isolated `开始`/`走`. End cues are isolated `OK`, `过`, `可以`, `好了`, or `结束`. Do not trim phrase-internal words such as `可以安装` or `开始拆卸`. File end is a valid take ending.
 
@@ -38,7 +38,7 @@ Start cues are `321开始`, `三二一开始`, `321走`, or isolated `开始`/`�
 
 Create formal captions from the supplied procedure, lightly polishing syntax for natural reading. Keep names, counts, directions, and warnings stated in the steps. Use two independently removable tracks: `文档字幕` and exact text `待确认`. Keep original audio and original 4K files untouched.
 
-The output contract and JSON field definitions are in [schemas.md](references/schemas.md). Read [usage.md](references/usage.md) for platform/setup details and [jianying10.md](references/jianying10.md) before registering a Jianying project. When helping with capture conventions, read [shooting-guide.md](references/shooting-guide.md), [filename-guide.md](references/filename-guide.md), and [wiki-format.md](references/wiki-format.md).
+The output contract and JSON field definitions are in [schemas.md](references/schemas.md). Read [usage.md](references/usage.md) for platform/setup details and [jianying10.md](references/jianying10.md) before registering a Jianying project. When helping with capture conventions, read [shooting-guide.md](references/shooting-guide.md), [filename-guide.md](references/filename-guide.md), and [wiki-format.md](references/wiki-format.md). When evaluating local recognition or considering a cloud ASR provider, read [speech-recognition.md](references/speech-recognition.md) and test representative user audio before recommending payment.
 
 ## Failure Handling
 

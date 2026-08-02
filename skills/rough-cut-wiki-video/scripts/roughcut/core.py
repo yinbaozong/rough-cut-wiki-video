@@ -14,10 +14,6 @@ STEP_LABEL_PATTERN = r"(?:步骤\s*(?:\d+|[一二三四五六七八九十]+)|ste
 EXPLICIT_STEP_PATTERN = rf"(?:\d+[.)、]|{STEP_LABEL_PATTERN}\s*[:：.,，]?)"
 
 
-class MissingTakeEvidenceError(RuntimeError):
-    pass
-
-
 def _clean(text: str) -> str:
     return unicodedata.normalize("NFKC", text).strip()
 
@@ -101,7 +97,7 @@ def _score(label: str, step: dict) -> float:
 def build_edit_plan(steps: list[dict], takes: list[dict]) -> dict:
     segments = []
     matched = set()
-    action_required_files = []
+    unmarked_files = []
 
     def best_match(label: str | None) -> tuple[float, dict | None]:
         if not label:
@@ -137,8 +133,19 @@ def build_edit_plan(steps: list[dict], takes: list[dict]) -> dict:
             and filename_step["id"] != step["id"]
         )
         status = "ambiguous" if conflict else ("matched" if step else "unmatched")
+        original_name = Path(take["source_file"]).name
+        if step:
+            review_reason = None
+        elif not take.get("spoken_label") and not evidence["label"]:
+            review_reason = "无报幕且无有效文件名"
+        elif not take.get("spoken_label"):
+            review_reason = "无报幕，文件名无法匹配教程步骤"
+        elif not evidence["label"]:
+            review_reason = "报幕无法匹配教程步骤，且无有效文件名"
+        else:
+            review_reason = "报幕和文件名均无法匹配教程步骤"
         if needs_user_input:
-            action_required_files.append(Path(take["source_file"]).name)
+            unmarked_files.append(original_name)
         if step:
             matched.add(step["id"])
         duration = float(take.get("duration", 0.0))
@@ -151,6 +158,7 @@ def build_edit_plan(steps: list[dict], takes: list[dict]) -> dict:
             "wiki_order": step["order"] if step else 999999,
             "part_number": evidence["part_number"],
             "status": status,
+            "display_name": original_name if step else f"待确认（{review_reason}）— {original_name}",
             "confidence": round(score, 3),
             "captions": [step["caption_text"]] if step else ["未识别到对应步骤"],
             "review_caption": [] if status == "matched" else ["待确认"],
@@ -164,6 +172,7 @@ def build_edit_plan(steps: list[dict], takes: list[dict]) -> dict:
                 "ocr_suggested_step_id": ocr_step["id"] if ocr_step and ocr_score >= threshold else None,
                 "conflict": conflict,
                 "needs_user_input": needs_user_input,
+                "review_reason": review_reason,
             },
             "source_index": source_index,
         })
@@ -172,7 +181,8 @@ def build_edit_plan(steps: list[dict], takes: list[dict]) -> dict:
         "schema_version": "1.0",
         "segments": segments,
         "missing_step_ids": [s["id"] for s in steps if s["id"] not in matched],
-        "action_required_files": action_required_files,
+        "action_required_files": unmarked_files.copy(),
+        "unmarked_files": unmarked_files,
     }
 
 

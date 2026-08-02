@@ -8,7 +8,6 @@ SKILL = Path(__file__).parents[1] / "skills" / "rough-cut-wiki-video"
 sys.path.insert(0, str(SKILL / "scripts"))
 
 from roughcut.core import (  # noqa: E402
-    MissingTakeEvidenceError,
     build_edit_plan,
     parse_filename,
     parse_wiki,
@@ -102,13 +101,14 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(segment["status"], "ambiguous")
         self.assertEqual(segment["evidence"]["selected_source"], "spoken")
 
-    def test_no_related_speech_or_filename_requires_user_action(self):
+    def test_no_related_speech_or_filename_is_kept_as_unmarked(self):
         steps = parse_wiki("1. 安装侧板。")
         plan = build_edit_plan(steps, [{
             "source_file": "DJI_0001.mp4", "duration": 4.0,
             "spoken_label": "测试测试",
         }])
         self.assertEqual(plan["action_required_files"], ["DJI_0001.mp4"])
+        self.assertEqual(plan["unmarked_files"], ["DJI_0001.mp4"])
         self.assertTrue(plan["segments"][0]["evidence"]["needs_user_input"])
 
     def test_wiki_order_drives_edit_order_and_keeps_duplicates(self):
@@ -172,19 +172,29 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(plan["segments"][0]["status"], "matched")
             self.assertIn("<fcpxml", (output / "timeline.fcpxml").read_text(encoding="utf-8"))
 
-    def test_pipeline_stops_and_prompts_when_audio_and_filename_are_unusable(self):
+    def test_pipeline_keeps_unmarked_media_for_review_without_renaming_source(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             media = root / "media"
             media.mkdir()
-            (media / "DJI_0001.mp4").write_bytes(b"placeholder")
+            source = media / "DJI_0001.mp4"
+            source.write_bytes(b"placeholder")
             wiki = root / "wiki.md"
             wiki.write_text("1. 安装侧板。", encoding="utf-8")
             output = root / "output"
 
-            with self.assertRaisesRegex(MissingTakeEvidenceError, "重新录制带有步骤口播"):
-                run_project(media, wiki, output, mode="filename", probe_media=False)
-            self.assertIn("需要用户处理", (output / "review.md").read_text(encoding="utf-8"))
+            plan = run_project(media, wiki, output, mode="filename", probe_media=False)
+
+            self.assertTrue(source.exists())
+            self.assertEqual(plan["unmarked_files"], ["DJI_0001.mp4"])
+            self.assertEqual(plan["segments"][0]["status"], "unmatched")
+            self.assertEqual(
+                plan["segments"][0]["display_name"],
+                "待确认（无报幕且无有效文件名）— DJI_0001.mp4",
+            )
+            self.assertIn("待确认", plan["segments"][0]["review_caption"])
+            self.assertTrue((output / "timeline.fcpxml").exists())
+            self.assertIn("无报幕且无有效文件名", (output / "review.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 from roughcut import __version__
-from roughcut.core import MissingTakeEvidenceError
 from roughcut.pipeline import run_project
 from roughcut.media import MissingWhisperModelError, find_binary, resolve_whisper_model
 from roughcut.jianying10 import export_jianying10
@@ -65,11 +64,7 @@ def main(argv=None) -> int:
         )
         print(json.dumps({"draft_dir": str(draft_dir), "registered": bool(args.user_data)}, ensure_ascii=False, indent=2))
         return 0
-    try:
-        plan = run_project(args.media, args.wiki, args.output, args.mode, not args.no_probe, args.model, args.preview, args.corrections, args.reuse_takes)
-    except MissingTakeEvidenceError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    plan = run_project(args.media, args.wiki, args.output, args.mode, not args.no_probe, args.model, args.preview, args.corrections, args.reuse_takes)
     print(json.dumps({"output": str(args.output.resolve()), "segments": len(plan["segments"]), "warnings": plan["warnings"]}, ensure_ascii=False, indent=2))
     return 0
 

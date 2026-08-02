@@ -147,7 +147,7 @@ The automatic pipeline is intentionally evidence-driven:
 4. **Transcribe locally:** faster-whisper `small` produces multilingual word timestamps. Start/end markers define source cut points and the short post-start phrase becomes the spoken step label.
 5. **Check procedure relevance:** the spoken label is scored against every written step. Empty speech, filler, or speech unrelated to the procedure is rejected as matching evidence.
 6. **Use the filename only when needed:** if no procedure-related spoken label exists, parse the filename for an action, object, sequence, and part number, then score that label against the procedure.
-7. **Stop instead of guessing:** if neither speech nor filename relates to the procedure, list the affected files and ask the user to record a spoken step label or rename them. Procedure order and OCR are not allowed to hide missing primary evidence.
+7. **Keep unmarked footage for review:** if neither speech nor filename relates to the procedure, do not guess and do not rename the source file. Keep the full clip at the end of the timeline, label it `待确认（无报幕且无有效文件名）— original-name`, and explain the reason in `review.md`.
 8. **Build the timeline:** select source in/out ranges, order clips by procedure step and part number, preserve repeated takes, and add review markers for conflicts.
 9. **Write captions and exports:** generate procedure-grounded captions, SRT, FCPXML, JSON checkpoints, and an optional review preview.
 10. **Create editor-native projects:** Final Cut Pro uses FCPXML. Windows Jianying uses a separate encrypted-draft and homepage-registration stage.
@@ -328,6 +328,10 @@ FCPXML references the original media. It does not contain a rendered copy, so mo
 
 Only the multilingual `faster-whisper small` model is supported. A lower-quality tiny fallback is intentionally not included.
 
+Recognition accuracy is not a fixed percentage. It depends heavily on microphone distance, background noise, speech volume, accent, and domain terms. For this Skill, the important measurement is whether a short spoken label selects the correct procedure step—not whether every casual word is transcribed perfectly. Before paying for a cloud API, test 10–20 representative clips with the local model, including several quiet, noisy, muffled, and terminology-heavy examples.
+
+If local recognition is weak, first shorten the label, speak it immediately after the start cue, move the microphone closer, and use a meaningful filename as independent evidence. For difficult dialects or specialist vocabulary, a cloud ASR service with hotwords or prompt context can be added later. See [speech-recognition.md](skills/rough-cut-wiki-video/references/speech-recognition.md) for the evaluation and cloud decision guide.
+
 Full setup downloads the model once into:
 
 ```text
@@ -456,7 +460,7 @@ Analysis can still produce a plan without FFmpeg when probing is disabled, but m
 - No specific cloud model API is required.
 - Original MP4/MOV files are read-only inputs.
 - The tool performs a rough cut, not final editorial judgment.
-- Visual-only actions with neither Wiki-related speech nor a meaningful filename stop automatic export and require the user to add a spoken label or rename the file.
+- Visual-only actions with neither procedure-related speech nor a meaningful filename remain in the export at the timeline end, use a `待确认` marker, and are listed as unmarked footage in `review.md`; original files are never renamed.
 - Jianying's private draft format can change; always keep SRT, FCPXML, and `edit-plan.json` as portable fallbacks.
 - Review captions, safety statements, quantities, and installation directions before publishing.
 

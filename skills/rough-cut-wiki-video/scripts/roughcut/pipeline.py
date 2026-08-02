@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .core import MissingTakeEvidenceError, build_edit_plan, parse_wiki
+from .core import build_edit_plan, parse_wiki
 from .exporters import render_preview, write_fcpxml, write_srt
 from .media import analyze_file, discover_media
 
@@ -38,21 +38,12 @@ def run_project(media_dir: Path, wiki_file: Path, output: Path, mode: str = "aut
     plan["mode_requested"] = mode
     plan["corrections_file"] = str(Path(corrections_file).resolve()) if corrections_file else None
     plan["warnings"] = warnings
+    if plan["unmarked_files"]:
+        names = ", ".join(plan["unmarked_files"])
+        warnings.append(
+            f"以下素材没有可用的报幕或文件名证据，已完整保留在时间线末尾并标记待确认：{names}。"
+        )
     _write_json(output / "edit-plan.json", plan)
-    if plan["action_required_files"]:
-        names = ", ".join(plan["action_required_files"])
-        message = (
-            "无法从语音或文件名判断这些素材对应的教程步骤："
-            f"{names}。请重新录制带有步骤口播的素材，或把文件重命名为动作名称后重试。"
-            " / No Wiki-related speech or filename was found. Record a spoken step label or rename the file."
-        )
-        warnings.append(message)
-        _write_json(output / "edit-plan.json", plan)
-        (output / "review.md").write_text(
-            "# 粗剪审核报告\n\n## 需要用户处理\n\n- " + message + "\n",
-            encoding="utf-8",
-        )
-        raise MissingTakeEvidenceError(message)
     write_srt(plan, output / "wiki-subtitles.srt")
     write_srt(plan, output / "review-subtitles.srt", review=True)
     write_fcpxml(plan, output / "timeline.fcpxml")
@@ -61,6 +52,12 @@ def run_project(media_dir: Path, wiki_file: Path, output: Path, mode: str = "aut
         if warning: warnings.append(warning)
     lines = ["# 粗剪审核报告", "", f"- 素材片段：{len(plan['segments'])}", f"- 待确认/未匹配：{sum(s['status'] != 'matched' for s in plan['segments'])}", f"- 未拍摄教程步骤：{', '.join(plan['missing_step_ids']) or '无'}", "", "## 警告", ""]
     lines += [f"- {w}" for w in warnings] or ["- 无"]
+    if plan["unmarked_files"]:
+        lines += ["", "## 无标记素材", ""]
+        lines += [
+            f"- `{Path(s['source_file']).name}`：{s['evidence']['review_reason']}；原文件未改名，已放在时间线末尾并标记 `待确认`。"
+            for s in plan["segments"] if s["status"] == "unmatched"
+        ]
     lines += ["", "## 时间轴", ""] + [f"- {i + 1}. `{Path(s['source_file']).name}` → {s['wiki_step_id'] or '未匹配'} ({s['status']}, {s['confidence']:.2f})" for i, s in enumerate(plan["segments"])]
     (output / "review.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return plan

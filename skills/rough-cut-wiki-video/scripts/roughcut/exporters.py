@@ -44,7 +44,7 @@ def write_fcpxml(plan: dict, target: Path) -> None:
     cursor = 0.0
     for i, seg in enumerate(plan["segments"], 2):
         duration = max(0.1, seg["source_out"] - seg["source_in"])
-        clip = SubElement(spine, "asset-clip", name=Path(seg["source_file"]).name, ref=f"r{i}", offset=f"{cursor}s", start=f"{seg['source_in']}s", duration=f"{duration}s")
+        clip = SubElement(spine, "asset-clip", name=seg.get("display_name") or Path(seg["source_file"]).name, ref=f"r{i}", offset=f"{cursor}s", start=f"{seg['source_in']}s", duration=f"{duration}s")
         if seg["captions"]:
             title = SubElement(clip, "title", name="文档字幕", lane="1", offset="0s", duration=f"{duration}s")
             SubElement(title, "text").text = " ".join(seg["captions"])
