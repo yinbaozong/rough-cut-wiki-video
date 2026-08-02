@@ -147,7 +147,7 @@ The automatic pipeline is intentionally evidence-driven:
 4. **Transcribe locally:** faster-whisper `small` produces multilingual word timestamps. Start/end markers define source cut points and the short post-start phrase becomes the spoken step label.
 5. **Check procedure relevance:** the spoken label is scored against every written step. Empty speech, filler, or speech unrelated to the procedure is rejected as matching evidence.
 6. **Use the filename only when needed:** if no procedure-related spoken label exists, parse the filename for an action, object, sequence, and part number, then score that label against the procedure.
-7. **Keep unmarked footage for review:** if neither speech nor filename relates to the procedure, do not guess and do not rename the source file. Keep the full clip at the end of the timeline, label it `待确认（无报幕且无有效文件名）— original-name`, and explain the reason in `review.md`.
+7. **Keep unmarked footage for review:** if neither speech nor filename relates to the procedure, do not guess and do not rename the source file. Keep the full clip at the end of the timeline, set its edit-plan/FCPXML display label to `待确认（无报幕且无有效文件名）— original-name`, add the `待确认` review text track, and explain the reason in `review.md`.
 8. **Build the timeline:** select source in/out ranges, order clips by procedure step and part number, preserve repeated takes, and add review markers for conflicts.
 9. **Write captions and exports:** generate procedure-grounded captions, SRT, FCPXML, JSON checkpoints, and an optional review preview.
 10. **Create editor-native projects:** Final Cut Pro uses FCPXML. Windows Jianying uses a separate encrypted-draft and homepage-registration stage.
