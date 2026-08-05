@@ -12,7 +12,9 @@ from roughcut.core import (  # noqa: E402
     parse_filename,
     parse_wiki,
     segment_transcript,
+    to_simplified,
 )
+from roughcut.lexicon import load_terms, repair  # noqa: E402
 from roughcut.pipeline import run_project  # noqa: E402
 from roughcut.media import MissingWhisperModelError, resolve_whisper_model  # noqa: E402
 
@@ -171,6 +173,35 @@ class CoreTests(unittest.TestCase):
             plan = json.loads((output / "edit-plan.json").read_text(encoding="utf-8"))
             self.assertEqual(plan["segments"][0]["status"], "matched")
             self.assertIn("<fcpxml", (output / "timeline.fcpxml").read_text(encoding="utf-8"))
+
+    def test_traditional_spoken_label_matches_simplified_wiki(self):
+        steps = parse_wiki("1. 安装底壳固定螺丝。")
+        plan = build_edit_plan(steps, [{
+            "source_file": "C9450.MP4", "duration": 4.0,
+            "spoken_label": to_simplified("安裝底殼固定螺絲2"),
+        }])
+        self.assertEqual(plan["segments"][0]["wiki_step_id"], "step-001")
+        self.assertEqual(plan["segments"][0]["status"], "matched")
+
+    def test_specific_step_wins_over_short_prefix_step(self):
+        steps = parse_wiki("1. 安装底壳。\n2. 安装底壳固定螺丝并预锁紧。")
+        plan = build_edit_plan(steps, [{
+            "source_file": "C9446.MP4", "duration": 4.0,
+            "spoken_label": "准备安装底壳固定螺丝1OK",
+        }])
+        self.assertEqual(plan["segments"][0]["wiki_step_id"], "step-002")
+
+    def test_lexicon_repairs_close_misheard_terms_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            glossary = Path(folder) / "lexicon.txt"
+            glossary.write_text("热端风扇\n挤出机组件\n底盖\n", encoding="utf-8")
+            terms = load_terms(glossary)
+            fixed, changes = repair("准备安装热端风山OK", terms)
+            self.assertEqual(fixed, "准备安装热端风扇OK")
+            self.assertEqual(changes[0]["corrected"], "热端风扇")
+            unchanged, empty = repair("移除底壳固定螺丝", terms)
+            self.assertEqual(unchanged, "移除底壳固定螺丝")
+            self.assertEqual(empty, [])
 
     def test_pipeline_keeps_unmarked_media_for_review_without_renaming_source(self):
         with tempfile.TemporaryDirectory() as folder:

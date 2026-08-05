@@ -6,7 +6,7 @@
 
 `rough-cut-wiki-video` is a portable Agent Skill that turns a folder of MP4/MOV footage and an ordered procedure into an editable tutorial-video rough cut. It works across step-by-step content such as assembly and repair, crafts, cooking, product demonstrations, workplace procedures, training, unboxing, and other practical how-to videos. It is not tied to 3D printing or any single subject.
 
-The Skill analyzes spoken take markers, short spoken step labels, filenames, procedure order, optional OCR, and media timing. It keeps the original 4K files untouched and produces an edit plan, editable captions, SRT, FCPXML, a review preview, and—on Windows—a native encrypted Jianying/CapCut China desktop draft with real source cut points.
+The Skill analyzes spoken take markers, short spoken step labels, filenames, procedure order, and media timing. Speech is pinned to Simplified Chinese by default, with an optional glossary for post-recognition term repair. Frame extraction and OCR are disabled by design. It keeps the original 4K files untouched and produces an edit plan, editable captions, SRT, FCPXML, a review preview, and—on Windows—a native encrypted Jianying/CapCut China desktop draft with real source cut points.
 
 ## Contents
 
@@ -88,9 +88,11 @@ The full profile installs:
 
 - `faster-whisper` for local multilingual speech recognition;
 - the multilingual `small` speech model;
-- `RapidOCR` and ONNX Runtime for optional frame text evidence;
+- ONNX Runtime as a speech-runtime dependency;
 - the pinned high-version `pyJianYingDraft` fork used for Jianying encryption and registration;
 - FFmpeg/ffprobe detection. On Windows, the script prints a `winget` command if FFmpeg is missing.
+
+Frame OCR was removed: it dominated runtime without changing match decisions.
 
 Use `-Profile core` or `./scripts/setup.sh core` only when you deliberately want filename-only processing without speech recognition.
 
@@ -143,8 +145,8 @@ The automatic pipeline is intentionally evidence-driven:
 
 1. **Read the procedure:** accept steps pasted into the conversation or loaded from a UTF-8 text/Markdown file, then parse the ordered filmed actions, names, quantities, directions, and step-specific cautions.
 2. **Probe every media file:** use ffprobe to record duration, audio presence, frame size, and stream information. Every discovered MP4/MOV must enter the plan or an actionable report.
-3. **Extract audio first:** in `auto` mode, FFmpeg creates a temporary mono 16 kHz WAV track. The original video is never changed.
-4. **Transcribe locally:** faster-whisper `small` produces multilingual word timestamps. Start/end markers define source cut points and the short post-start phrase becomes the spoken step label.
+3. **Extract audio in parallel:** in `auto` mode, FFmpeg creates temporary mono 16 kHz WAV tracks concurrently. The original video is never changed.
+4. **Transcribe locally:** faster-whisper `small` produces word timestamps with language pinned to `zh` by default. Start/end markers define source cut points and the short post-start phrase becomes the spoken step label.
 5. **Check procedure relevance:** the spoken label is scored against every written step. Empty speech, filler, or speech unrelated to the procedure is rejected as matching evidence.
 6. **Use the filename only when needed:** if no procedure-related spoken label exists, parse the filename for an action, object, sequence, and part number, then score that label against the procedure.
 7. **Keep unmarked footage for review:** if neither speech nor filename relates to the procedure, do not guess and do not rename the source file. Keep the full clip at the end of the timeline, set its edit-plan/FCPXML display label to `待确认（无报幕且无有效文件名）— original-name`, add the `待确认` review text track, and explain the reason in `review.md`.
@@ -254,7 +256,7 @@ Evidence priority:
 1. User-provided corrections.
 2. Wiki-related spoken labels after a start marker.
 3. Meaningful filenames and explicit part numbers, only when speech is empty or unrelated.
-4. Wiki order, OCR, visual context, and neighboring steps for review support—not as a substitute when both speech and filename are unusable.
+4. Wiki order and neighboring steps for review support—not as a substitute when both speech and filename are unusable. Frame OCR is disabled. When several steps qualify, prefer the one sharing more terms so a short step cannot steal a more specific take.
 
 Timeline behavior:
 
@@ -281,7 +283,13 @@ The current implementation has been validated with Jianying `10.6.0.14057` and `
 
 ### Safe two-stage workflow
 
-Generate an encrypted staging draft without touching the homepage index:
+Staging is only needed when Jianying or the writer library changes. Check the fingerprint first:
+
+```powershell
+& "$Skill\.venv\Scripts\python.exe" "$Skill\scripts\roughcut.py" fingerprint
+```
+
+If the fingerprint is unchanged, register directly. Otherwise generate an encrypted staging draft without touching the homepage index:
 
 ```powershell
 & "$Skill\.venv\Scripts\python.exe" "$Skill\scripts\roughcut.py" jianying10 `
@@ -330,7 +338,9 @@ Only the multilingual `faster-whisper small` model is supported. A lower-quality
 
 Recognition accuracy is not a fixed percentage. It depends heavily on microphone distance, background noise, speech volume, accent, and domain terms. For this Skill, the important measurement is whether a short spoken label selects the correct procedure step—not whether every casual word is transcribed perfectly. Before paying for a cloud API, test 10–20 representative clips with the local model, including several quiet, noisy, muffled, and terminology-heavy examples.
 
-If local recognition is weak, first shorten the label, speak it immediately after the start cue, move the microphone closer, and use a meaningful filename as independent evidence. For difficult dialects or specialist vocabulary, a cloud ASR service with hotwords or prompt context can be added later. See [speech-recognition.md](skills/rough-cut-wiki-video/references/speech-recognition.md) for the evaluation and cloud decision guide.
+Speech defaults to `--language zh`. Auto-detection is slower and can misread short, noisy cues as other languages. Pass `--language ""` only when the footage is not Chinese. Traditional characters in the transcript are normalized to Simplified for matching.
+
+If local recognition is weak, first shorten the label, speak it immediately after the start cue, move the microphone closer, and use a meaningful filename as independent evidence. Pass `--lexicon` with one term per line for conservative post-recognition repair; do not use Whisper `hotwords`, which silently truncate at 223 tokens. For difficult dialects or specialist vocabulary, a cloud ASR service can still be evaluated later. See [speech-recognition.md](skills/rough-cut-wiki-video/references/speech-recognition.md).
 
 Full setup downloads the model once into:
 
@@ -365,13 +375,27 @@ roughcut.py run
   --output PATH
   [--mode auto|filename]
   [--model small]
+  [--language zh]
+  [--workers 6]
+  [--batch-size 2]
+  [--chunk-length 10]
+  [--cpu-threads N]
+  [--lexicon glossary.txt]
   [--preview]
   [--corrections corrections.json]
   [--reuse-takes]
   [--no-probe]
 ```
 
-`auto` uses speech and falls back to other evidence for ordinary recognition failures. A missing `small` model is a setup error and prints the one-command repair instruction. `filename` skips speech and keeps the full duration of each file.
+`auto` uses speech and falls back to other evidence for ordinary recognition failures. A missing `small` model is a setup error and prints the one-command repair instruction. `filename` skips speech and keeps the full duration of each file. Neither mode extracts frames for OCR.
+
+### Fingerprint Jianying/writer signature
+
+```text
+roughcut.py fingerprint
+  [--install-dir PATH]
+  [--drafts DRAFT_ROOT]
+```
 
 ### Generate/register Jianying
 
@@ -404,7 +428,7 @@ output/
 
 - `wiki-source.md`: exact saved procedure input, whether it was pasted or loaded from a file.
 - `wiki-steps.json`: normalized action steps and caption facts.
-- `takes.json`: media probes, labels, timestamps, OCR evidence, and warnings.
+- `takes.json`: media probes, labels, timestamps, optional lexicon repairs, and warnings.
 - `edit-plan.json`: application-independent source ranges, ordering, captions, and match status.
 - `review.md`: missing steps, ambiguous clips, fallbacks, and timeline summary.
 - `wiki-subtitles.srt`: formal procedure-derived captions.
@@ -456,7 +480,7 @@ Analysis can still produce a plan without FFmpeg when probing is disabled, but m
 
 ## Privacy, safety, and limitations
 
-- Speech recognition and OCR run locally.
+- Speech recognition runs locally; frame OCR is not used.
 - No specific cloud model API is required.
 - Original MP4/MOV files are read-only inputs.
 - The tool performs a rough cut, not final editorial judgment.

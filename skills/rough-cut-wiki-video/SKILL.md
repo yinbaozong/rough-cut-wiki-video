@@ -18,19 +18,27 @@ Turn an ordered procedure and a footage folder into a non-destructive tutorial r
    python scripts/roughcut.py doctor
    ```
 
-5. Run analysis. Use `auto` unless the user requests filename-only processing. In auto mode, extract the audio track first, transcribe with word timestamps, and test whether the spoken label is related to a procedure step before considering the filename:
+5. Run analysis. Use `auto` unless the user requests filename-only processing. In auto mode, extract every audio track in parallel, transcribe with word timestamps, and test whether the spoken label is related to a procedure step before considering the filename:
 
    ```powershell
-   python scripts/roughcut.py run --media "E:\footage" --wiki "E:\job\wiki.md" --output "E:\job\output" --mode auto --preview
+   python scripts/roughcut.py run --media "E:\footage" --wiki "E:\job\wiki.md" --output "E:\job\output" --mode auto --lexicon "E:\glossary.txt"
    ```
+
+   Speech language is pinned to `zh` by default. Auto-detection measured about twice as slow and misread short, noisy cues as other languages, returning transcript text in them. Pass `--language ""` only when the footage really is not Chinese. Traditional output is normalized to Simplified so it can match a Simplified procedure.
+
+   On Windows the repeatable wrapper is `scripts/run-job.ps1`, which pins PATH, output layout, the glossary, and the staging gate. Re-run with `-ReuseTakes` after editing the procedure or corrections: it recomputes matching from `takes.json` in seconds instead of re-transcribing.
 
 6. Inspect `review.md`, `edit-plan.json`, representative evidence, and warnings. Improve `wiki-steps.json` or `edit-plan.json` only when the footage/procedure evidence supports the change. Never invent quantities, objects, ingredients, parts, directions, or safety claims.
 7. Re-run exporters after a manual plan change (currently use `run` for a full rebuild). Keep ambiguous or conflicting footage and mark it `待确认`; never silently drop input media.
-8. On Windows, create a native Jianying 10/11 project from `edit-plan.json` with the `jianying10` command. First omit `--user-data` and validate in a staging directory. Before adding `--user-data` to register the real project, require Jianying to be fully closed. The exporter must encrypt both draft JSON files with the newest valid local `videoeditor.dll`, back up `root_meta_info.json`, and register a matching homepage entry. Never replace an existing draft unless the user explicitly authorizes it.
+8. On Windows, create a native Jianying 10/11 project from `edit-plan.json` with the `jianying10` command. Validate in a staging directory (omit `--user-data`) only when `roughcut.py fingerprint` differs from the recorded signature; encoding breaks only when Jianying or the writer library changes, so staging every run wastes time. Before adding `--user-data` to register the real project, require Jianying to be fully closed. The exporter must encrypt both draft JSON files with the newest valid local `videoeditor.dll`, back up `root_meta_info.json`, and register a matching homepage entry. Never replace an existing draft unless the user explicitly authorizes it.
 
 ## Evidence Rules
 
-Use this priority: user corrections; procedure-related post-start spoken label; meaningful filename and part number; procedure order/OCR/visual context for review only. A camera filename such as `DJI_0001` is not a label. If speech is empty or unrelated to every procedure step, try the filename. If neither provides procedure-related evidence, never guess and never rename the original media: preserve the whole clip at the timeline end, set `status: unmatched`, use edit-plan/FCPXML display name `待确认（reason）— original-name`, add exact review-track text `待确认` to editor exports, and explain the missing evidence in `review.md`. Continue exporting the other footage. Preserve repeated takes and order explicit parts before recording time. List unshot procedure steps only in the report.
+Use this priority: user corrections; procedure-related post-start spoken label; meaningful filename and part number; procedure order and recording time for review only. Frame extraction and OCR are disabled by design: never decode video frames for evidence, because it dominated runtime without changing match decisions.
+
+When several steps qualify, choose the one sharing the most terms with the take rather than the highest ratio. A short step such as `安装底壳` otherwise scores a perfect ratio against the take `安装底壳固定螺丝`, stealing footage from the more specific `安装底壳固定螺丝并预锁紧`.
+
+A glossary passed with `--lexicon` repairs recognized terms after transcription instead of biasing the decoder. Never route a glossary through `hotwords`: faster-whisper truncates hotwords at 223 tokens, so a real glossary loses everything past its first few entries. Repair only replaces spans that closely match a glossary term, keeps the model's original text in `spoken_label_raw`, and lists every substitution in `review.md` for review. A camera filename such as `DJI_0001` is not a label. If speech is empty or unrelated to every procedure step, try the filename. If neither provides procedure-related evidence, never guess and never rename the original media: preserve the whole clip at the timeline end, set `status: unmatched`, use edit-plan/FCPXML display name `待确认（reason）— original-name`, add exact review-track text `待确认` to editor exports, and explain the missing evidence in `review.md`. Continue exporting the other footage. Preserve repeated takes and order explicit parts before recording time. List unshot procedure steps only in the report.
 
 Start cues are `321开始`, `三二一开始`, `321走`, or isolated `开始`/`走`. End cues are isolated `OK`, `过`, `可以`, `好了`, or `结束`. Do not trim phrase-internal words such as `可以安装` or `开始拆卸`. File end is a valid take ending.
 
@@ -42,4 +50,4 @@ The output contract and JSON field definitions are in [schemas.md](references/sc
 
 ## Failure Handling
 
-Use only the multilingual faster-whisper `small` model. Do not substitute `tiny`. If `small` is missing or incomplete, stop speech analysis and show the one-command `scripts/download-model.ps1` or `scripts/download-model.sh` repair. For other recognition or OCR failures, preserve all media, use remaining evidence, and record the fallback in `review.md`. If FFmpeg is absent, still emit the plan, SRT, FCPXML, and draft candidate; omit the preview. If Jianying encryption or registration fails, preserve the staging draft, diagnostics, SRT, FCPXML, and `edit-plan.json`; never replace, downgrade, or uninstall the user's Jianying automatically.
+Use only the multilingual faster-whisper `small` model. Do not substitute `tiny`. If `small` is missing or incomplete, stop speech analysis and show the one-command `scripts/download-model.ps1` or `scripts/download-model.sh` repair. For other recognition failures, preserve all media, use remaining evidence, and record the fallback in `review.md`. If FFmpeg is absent, still emit the plan, SRT, FCPXML, and draft candidate; omit the preview. If Jianying encryption or registration fails, preserve the staging draft, diagnostics, SRT, FCPXML, and `edit-plan.json`; never replace, downgrade, or uninstall the user's Jianying automatically.

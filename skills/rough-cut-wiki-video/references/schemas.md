@@ -2,7 +2,11 @@
 
 `WikiStep`：`id`、`order`、`branch`、`wiki_text`、`caption_text`、`keywords`、`notes`。
 
-`TakeEvidence`：`source_file`、`duration`、`in`/`out`（可选）、`has_audio`、`spoken_label`（可选）、`transcript_words`（可选）、`ocr_text`（可选）、`end_reason` 和视频探测信息。没有识别到文字时仍保留一条 `end_reason: no_speech` 的完整素材记录。
+`TakeEvidence`：`source_file`、`duration`、`in`/`out`（可选）、`has_audio`、`spoken_label`（可选）、`transcript_words`（可选）、`ocr_text`（可选，仅兼容旧数据或 `--corrections` 手动注入；分析过程不再抽帧生成）、`end_reason` 和视频探测信息。没有识别到文字时仍保留一条 `end_reason: no_speech` 的完整素材记录。
+
+启用 `--lexicon` 且发生纠错时追加两个字段：`spoken_label_raw` 保存模型原始输出，`lexicon_repairs` 是替换明细列表，每项含 `found`、`corrected`、`score`。未发生纠错时两个字段都不出现，`spoken_label` 即模型原文。`transcript_words` 始终保留原始词级输出，不做繁简归一化，便于回溯。
+
+`edit-plan.json` 的 `recognition` 记录本次识别设置：`language`、`model`、`workers`、`batch_size`、`chunk_length`、`cpu_threads`、`lexicon_file`、`lexicon_terms`，用于复现结果和排查差异。
 
 `EditSegment`：`source_file`、`source_in`、`source_out`、`display_name`、`wiki_step_id`、`wiki_order`、`part_number`、`confidence`、`captions`、`review_caption`、`matched | ambiguous | unmatched` 状态与 `evidence`。`evidence.selected_source` 记录 `manual | spoken | filename`；`needs_user_input` 表示口播与文件名均无法关联教程步骤；`review_reason` 记录待确认原因。
 

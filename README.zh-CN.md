@@ -6,7 +6,7 @@
 
 `rough-cut-wiki-video` 是一个可分享、平台无关的 Agent Skill。它会读取 MP4/MOV 素材文件夹和一份按顺序编写的教程步骤，把素材整理成可继续编辑的教学视频粗剪。它适用于安装维修、手工制作、烹饪、产品演示、工作流程、培训、开箱及其他按步骤讲解的视频，不局限于 3D 打印领域。
 
-Skill 会综合分析录制口令、简短步骤口播、文件名、教程步骤顺序、可选 OCR 和素材时间。它不会修改原始 4K 文件，可以输出通用剪辑计划、可编辑字幕、SRT、FCPXML、审核预览，以及 Windows 剪映 10/11 能直接显示并编辑的原生加密草稿。
+Skill 会综合分析录制口令、简短步骤口播、文件名、教程步骤顺序和素材时间。默认固定中文简体识别，支持可选术语表做识别后纠错；不抽帧、不做画面 OCR。它不会修改原始 4K 文件，可以输出通用剪辑计划、可编辑字幕、SRT、FCPXML、审核预览，以及 Windows 剪映 10/11 能直接显示并编辑的原生加密草稿。
 
 ## 目录
 
@@ -94,9 +94,11 @@ chmod +x scripts/setup.sh scripts/download-model.sh
 
 - `faster-whisper`：本地多语言语音识别；
 - 多语言 `small` 模型；
-- RapidOCR 和 ONNX Runtime：可选画面文字证据；
+- ONNX Runtime：语音识别运行时依赖；
 - 固定提交版本的高版本 `pyJianYingDraft`：用于剪映加密和首页注册；
 - FFmpeg/ffprobe 检测。Windows 缺少 FFmpeg 时会显示 `winget` 安装命令。
+
+画面抽帧 OCR 已移除：它显著拖慢分析，却几乎不改变匹配决策。
 
 只有在明确不需要语音识别、只想按文件名处理时，才选择 `core`：
 
@@ -153,7 +155,7 @@ $Skill = "$HOME\.agents\skills\rough-cut-wiki-video"
 
 1. **读取教程步骤：** 接受对话框中直接粘贴的内容，或读取 UTF-8 纯文本/Markdown 文件，提取按顺序拍摄的动作、名称、数量、方向和对应步骤的注意事项。
 2. **探测所有素材：** 使用 ffprobe 读取时长、音轨、分辨率和流信息。发现的每一个 MP4/MOV 都必须进入剪辑计划或明确的处理报告。
-3. **优先分离音轨：** `auto` 模式下，FFmpeg 临时生成单声道 16 kHz WAV。原始视频不会被改写。
+3. **并行分离音轨：** `auto` 模式下，FFmpeg 并发生成临时单声道 16 kHz WAV。原始视频不会被改写。默认固定中文简体识别，可选词库做识别后纠错；不抽帧 OCR。
 4. **本地语音识别：** faster-whisper `small` 生成多语言词级时间戳。开始/结束口令决定源素材切割点，开始口令后的短标签作为步骤口播。
 5. **判断口播是否与教程有关：** 把口播与每个教程步骤比较。没有文字、只有无效语气词或与步骤完全不相关的内容，不能作为匹配证据。
 6. **必要时再检查文件名：** 没有有效口播时，从文件名提取动作、对象、顺序号和分段编号，再与教程步骤匹配。
@@ -265,7 +267,7 @@ Agent 可以调整语序、补充主语和连接词，让字幕更适合朗读�
 1. 用户提供的人工修正；
 2. 开始口令后、确实与 Wiki 有关的步骤口播；
 3. 仅在口播为空或与 Wiki 无关时，使用有意义的文件名和明确分段编号；
-4. Wiki 顺序、OCR、视觉上下文和相邻步骤只用于辅助审核，不能代替缺失的口播和文件名。
+4. Wiki 顺序和相邻步骤只用于辅助审核，不能代替缺失的口播和文件名。不抽帧、不做画面 OCR。多个步骤都达标时，优先匹配共享词更多的具体步骤，避免短步骤抢走更完整的报幕。
 
 时间线规则：
 
@@ -292,7 +294,13 @@ Agent 可以调整语序、补充主语和连接词，让字幕更适合朗读�
 
 ### 两阶段安全流程
 
-先生成不写首页索引的测试草稿：
+兼容性 staging 不必每次都跑。用指纹判断剪映或写库是否变化：
+
+```powershell
+& "$Skill\.venv\Scripts\python.exe" "$Skill\scripts\roughcut.py" fingerprint
+```
+
+指纹包含注册表版本、安装目录、`videoeditor.dll` 大小/修改时间和写库版本。与上次记录一致就直接注册；变化后才自动补验一次。也可先手动生成不写首页索引的测试草稿：
 
 ```powershell
 & "$Skill\.venv\Scripts\python.exe" "$Skill\scripts\roughcut.py" jianying10 `
@@ -380,13 +388,27 @@ roughcut.py run
   --output 输出目录
   [--mode auto|filename]
   [--model small]
+  [--language zh]
+  [--workers 6]
+  [--batch-size 2]
+  [--chunk-length 10]
+  [--cpu-threads N]
+  [--lexicon glossary.txt]
   [--preview]
   [--corrections corrections.json]
   [--reuse-takes]
   [--no-probe]
 ```
 
-`auto` 使用语音、文件名、Wiki 顺序等证据。普通识别故障可以退回其他证据；缺少 `small` 模型属于安装问题，会显示一条修复命令。`filename` 完全跳过语音识别，并保留每个文件的完整时长。
+`auto` 使用语音、文件名、Wiki 顺序等证据。普通识别故障可以退回其他证据；缺少 `small` 模型属于安装问题，会显示一条修复命令。`filename` 完全跳过语音识别，并保留每个文件的完整时长。两种模式都不抽帧 OCR。
+
+### 查看剪映/写库指纹
+
+```text
+roughcut.py fingerprint
+  [--install-dir PATH]
+  [--drafts DRAFT_ROOT]
+```
 
 ### 生成或注册剪映项目
 
@@ -419,7 +441,7 @@ output/
 
 - `wiki-source.md`：原样保存的教程步骤，可以来自粘贴内容或本地文件。
 - `wiki-steps.json`：结构化步骤和字幕事实。
-- `takes.json`：媒体信息、口播标签、入出点、OCR 和警告。
+- `takes.json`：媒体信息、口播标签、入出点、词库纠错痕迹和警告。
 - `edit-plan.json`：与剪辑软件无关的素材范围、顺序、字幕和匹配状态。
 - `review.md`：缺失步骤、待确认素材、降级情况和时间线摘要。
 - `wiki-subtitles.srt`：根据教程步骤润色后的正式字幕。
@@ -452,8 +474,10 @@ output/
 
 - 开始口令后立刻说更短的步骤名；
 - 用简短动作名和分段编号重命名文件；
+- 用 `--lexicon` 提供术语表做识别后纠错（不走 hotwords，避免 223 token 静默截断）；
 - 提供 corrections JSON 作为最高优先级人工修正；
 - Wiki 与口播尽量使用一致的部件名称。
+- 默认固定 `--language zh`；确认不是中文素材时才传 `--language ""`。
 
 ### 素材没有音轨或只想按文件名剪
 
@@ -471,7 +495,7 @@ winget install --id Gyan.FFmpeg -e
 
 ## 隐私、安全和限制
 
-- 语音识别和 OCR 在本地运行。
+- 语音识别在本地运行；不抽帧 OCR。
 - 不依赖某个固定云端模型 API。
 - 原始 MP4/MOV 只读，不会被覆盖。
 - 这是粗剪工具，不代替最终人工剪辑判断。

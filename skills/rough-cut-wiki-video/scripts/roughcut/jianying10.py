@@ -38,6 +38,48 @@ def _backup_root_metadata(user_data: Path, draft_root: Path) -> Path | None:
     return backup_path
 
 
+_UNINSTALL_SUBKEYS = (
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\JianyingPro",
+    r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\JianyingPro",
+)
+
+
+def read_registry_entry() -> dict:
+    """Read Jianying's uninstall entry for its version and install root.
+
+    InstallLocation is often empty, but UninstallString and DisplayIcon point at
+    ``<install root>\\uninst.exe``, which is the only reliable way to locate an
+    install placed outside Program Files.
+    """
+    if os.name != "nt":
+        return {}
+    import winreg
+
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for subkey in _UNINSTALL_SUBKEYS:
+            try:
+                with winreg.OpenKey(hive, subkey) as key:
+                    values = {}
+                    for name in ("DisplayVersion", "InstallLocation", "UninstallString", "DisplayIcon"):
+                        try:
+                            values[name] = str(winreg.QueryValueEx(key, name)[0]).strip()
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+            roots: list[Path] = []
+            location = values.get("InstallLocation")
+            if location:
+                roots.append(Path(location))
+            for name in ("UninstallString", "DisplayIcon"):
+                raw = values.get(name, "").strip('"').split(",")[0].strip().strip('"')
+                if raw.lower().endswith(".exe"):
+                    roots.append(Path(raw).parent)
+            if values.get("DisplayVersion") or roots:
+                return {"version": values.get("DisplayVersion"), "roots": roots}
+    return {}
+
+
 def discover_jianying_install_dir(
     preferred: Path | None = None,
     *,
@@ -58,6 +100,7 @@ def discover_jianying_install_dir(
         roots.extend([preferred_path, preferred_path.parent])
     if draft_root:
         roots.append(Path(draft_root).resolve().parent / "JianyingPro")
+    roots.extend(read_registry_entry().get("roots", []))
     for variable in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"):
         value = os.environ.get(variable)
         if value:
@@ -83,6 +126,43 @@ def discover_jianying_install_dir(
         return numbers, path.stat().st_mtime_ns
 
     return max(candidates.values(), key=version_key)
+
+
+def fingerprint(preferred: Path | None = None, *, draft_root: Path | None = None) -> dict:
+    """Signature of everything that can break draft encoding.
+
+    A staging validation only needs to run again when this changes, which in
+    practice means Jianying updated itself or the writer library was upgraded.
+    """
+    entry = read_registry_entry()
+    result = {
+        "registry_version": entry.get("version"),
+        "install_dir": None,
+        "videoeditor_dll": None,
+        "writer_version": None,
+    }
+    try:
+        install_dir = discover_jianying_install_dir(preferred, draft_root=draft_root)
+    except FileNotFoundError:
+        install_dir = None
+    if install_dir is not None:
+        result["install_dir"] = str(install_dir)
+        dll = install_dir / "videoeditor.dll"
+        if dll.is_file():
+            stat = dll.stat()
+            result["videoeditor_dll"] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    try:
+        from importlib.metadata import version
+
+        result["writer_version"] = version("pyJianYingDraft")
+    except Exception:
+        try:
+            import pyJianYingDraft
+
+            result["writer_version"] = getattr(pyJianYingDraft, "__version__", "unknown")
+        except ImportError:
+            pass
+    return result
 
 
 def export_jianying10(
