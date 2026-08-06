@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Tests](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml/badge.svg)](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml)
+[![Check](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml/badge.svg)](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml)
 
 `rough-cut-wiki-video` 是一个可分享、平台无关的 Agent Skill。它会读取 MP4/MOV 素材文件夹和一份按顺序编写的教程步骤，把素材整理成可继续编辑的教学视频粗剪。它适用于安装维修、手工制作、烹饪、产品演示、工作流程、培训、开箱及其他按步骤讲解的视频，不局限于 3D 打印领域。
 
@@ -25,7 +25,7 @@ Skill 会综合分析录制口令、简短步骤口播、文件名、教程步�
 - [输出文件说明](#输出文件说明)
 - [常见问题](#常见问题)
 - [隐私、安全和限制](#隐私安全和限制)
-- [开发和测试](#开发和测试)
+- [许可证](#许可证)
 
 ## 可以生成什么
 
@@ -503,19 +503,6 @@ winget install --id Gyan.FFmpeg -e
 - 剪映私有草稿格式可能继续变化，因此始终保留 SRT、FCPXML 和 `edit-plan.json`。
 - 发布视频前需要人工检查字幕、安全提示、数量和安装方向。
 
-## 开发和测试
-
-运行测试：
-
-```powershell
-.\skills\rough-cut-wiki-video\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-验证 Skill 包：
-
-```powershell
-python "$HOME\.codex\skills\.system\skill-creator\scripts\quick_validate.py" `
-  .\skills\rough-cut-wiki-video
-```
+## 许可证
 
 本仓库使用 MIT 许可证。第三方包和模型保留各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

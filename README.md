@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Tests](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml/badge.svg)](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml)
+[![Check](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml/badge.svg)](https://github.com/yinbaozong/rough-cut-wiki-video/actions/workflows/test.yml)
 
 `rough-cut-wiki-video` is a portable Agent Skill that turns a folder of MP4/MOV footage and an ordered procedure into an editable tutorial-video rough cut. It works across step-by-step content such as assembly and repair, crafts, cooking, product demonstrations, workplace procedures, training, unboxing, and other practical how-to videos. It is not tied to 3D printing or any single subject.
 
@@ -25,7 +25,7 @@ The Skill analyzes spoken take markers, short spoken step labels, filenames, pro
 - [Output reference](#output-reference)
 - [Troubleshooting](#troubleshooting)
 - [Privacy, safety, and limitations](#privacy-safety-and-limitations)
-- [Development](#development)
+- [License](#license)
 
 ## What it produces
 
@@ -488,19 +488,6 @@ Analysis can still produce a plan without FFmpeg when probing is disabled, but m
 - Jianying's private draft format can change; always keep SRT, FCPXML, and `edit-plan.json` as portable fallbacks.
 - Review captions, safety statements, quantities, and installation directions before publishing.
 
-## Development
-
-Run tests:
-
-```powershell
-.\skills\rough-cut-wiki-video\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-Validate the Skill package:
-
-```powershell
-python "$HOME\.codex\skills\.system\skill-creator\scripts\quick_validate.py" `
-  .\skills\rough-cut-wiki-video
-```
+## License
 
 The repository is licensed under MIT. Third-party packages and models retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
