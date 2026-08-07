@@ -6,7 +6,7 @@
 
 `rough-cut-wiki-video` is a portable Agent Skill that turns a folder of MP4/MOV footage and an ordered procedure into an editable tutorial-video rough cut. It works across step-by-step content such as assembly and repair, crafts, cooking, product demonstrations, workplace procedures, training, unboxing, and other practical how-to videos. It is not tied to 3D printing or any single subject.
 
-The Skill analyzes spoken take markers, short spoken step labels, filenames, procedure order, and media timing. Speech is pinned to Simplified Chinese by default, with an optional glossary for post-recognition term repair. Frame extraction and OCR are disabled by design. It keeps the original 4K files untouched and produces an edit plan, editable captions, SRT, FCPXML, a review preview, and—on Windows—a native encrypted Jianying/CapCut China desktop draft with real source cut points.
+The Skill analyzes spoken take markers, short spoken step labels, filenames, procedure order, and media timing. Speech is pinned to Simplified Chinese by default. Term repair runs after recognition in two layers: a conservative automatic pass, plus a pronunciation-aware pass that proposes homophone fixes for review rather than applying them. Frame extraction and OCR are disabled by design. It keeps the original 4K files untouched and produces an edit plan, editable captions, SRT, FCPXML, a review preview, and—on Windows—a native encrypted Jianying/CapCut China desktop draft with real source cut points.
 
 ## Contents
 
@@ -14,9 +14,13 @@ The Skill analyzes spoken take markers, short spoken step labels, filenames, pro
 - [Supported platforms](#supported-platforms)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [One-command job script](#one-command-job-script)
 - [How it works](#how-it-works)
+- [Repository layout and algorithms](#repository-layout-and-algorithms)
 - [How to record footage](#how-to-record-footage)
 - [How to provide the procedure](#how-to-provide-the-procedure)
+- [Optional inputs: glossary and corrections](#optional-inputs-glossary-and-corrections)
+- [Two-layer term repair](#two-layer-term-repair)
 - [Matching and edit rules](#matching-and-edit-rules)
 - [Jianying 10/11 editable drafts](#jianying-1011-editable-drafts)
 - [Final Cut Pro workflow](#final-cut-pro-workflow)
@@ -89,6 +93,7 @@ The full profile installs:
 - `faster-whisper` for local multilingual speech recognition;
 - the multilingual `small` speech model;
 - ONNX Runtime as a speech-runtime dependency;
+- `pypinyin` for pronunciation comparison during term repair; pure Python, no compiled dependency;
 - the pinned high-version `pyJianYingDraft` fork used for Jianying encryption and registration;
 - FFmpeg/ffprobe detection. On Windows, the script prints a `winget` command if FFmpeg is missing.
 
@@ -101,6 +106,21 @@ Use `-Profile core` or `./scripts/setup.sh core` only when you deliberately want
 ```powershell
 .\.venv\Scripts\python.exe .\scripts\roughcut.py doctor --json
 ```
+
+A healthy report shows `ffmpeg`/`ffprobe` found, `faster_whisper` importable, the `small` model present, `pyJianYingDraft` importable, `frame_ocr: disabled`, and `pinyin_repair: True`.
+
+### 4. First-run checklist
+
+Do these once per machine, in this order:
+
+1. Install the Skill and run the `full` setup profile above.
+2. Make FFmpeg reachable. `winget install --id Gyan.FFmpeg -e`, or drop a portable build somewhere and pass `-FfmpegBin` to the job script so nothing is added to your PATH permanently.
+3. Confirm `doctor` reports the `small` model as present. If it is missing, run `scripts/download-model.ps1`.
+4. Windows only, and only if you want native drafts: install Jianying/CapCut China 10.x or 11.x normally and launch it once so it creates `%LOCALAPPDATA%\JianyingPro\User Data` and its drafts folder. Note where drafts live, typically `D:\Software\JianyingPro Drafts`.
+5. Run one job with `-NoDraft` first and read `review.md`. This confirms recognition and matching before anything touches Jianying.
+6. Run the same job without `-NoDraft`. The first draft triggers one staging validation, because no fingerprint has been recorded yet. Later runs skip it until Jianying or the writer library changes.
+
+No Jianying account, license key, or online activation is involved. "Registering" here means writing an entry into Jianying's own local homepage index; see [Jianying 10/11 editable drafts](#jianying-1011-editable-drafts) for exactly what is written.
 
 ## Quick start
 
@@ -139,6 +159,48 @@ $Skill = "$HOME\.agents\skills\rough-cut-wiki-video"
 
 When text is pasted into the conversation, the agent saves it unchanged as UTF-8 `wiki-source.md` inside the job before running the command. Direct CLI use still accepts a file through `--wiki`; that file may be `.txt`, `.md`, or another UTF-8 text export. Web scraping is not required.
 
+## One-command job script
+
+`scripts/run-job.ps1` chains analysis, staging validation, and draft registration so a repeat shoot needs one line instead of three commands. It is Windows-only and must stay UTF-8 **with BOM**, otherwise Windows PowerShell 5.1 mis-parses the Chinese strings inside it.
+
+```powershell
+& "$Skill\scripts\run-job.ps1" -JobName tray-disassembly `
+  -Media '\\nas\footage\tray' `
+  -WikiText '移除底壳固定螺丝，取出底壳，安装底壳预锁紧固定螺丝，全部螺丝安装完成后再最终锁紧。' `
+  -JobRoot 'D:\roughcut\jobs' `
+  -Lexicon 'D:\roughcut\glossary.txt' `
+  -FfmpegBin 'D:\roughcut\tools\ffmpeg\bin'
+```
+
+What it does, in order:
+
+1. Creates `<JobRoot>\<JobName>\` with an `output\` subfolder, and prepends `-FfmpegBin` to `PATH` for this process only.
+2. Materializes the procedure. `-WikiFile` is copied in as `wiki.md`; `-WikiText` is split on Chinese and ASCII commas, semicolons, and full stops into a numbered list, with the untouched original kept as a comment header. An existing `wiki.md` in the job folder is reused if neither is supplied.
+3. Runs `roughcut.py run` with the recognition tuning flags, plus `--lexicon` and `--corrections` when those files exist. Prints the elapsed analysis time.
+4. Stops here if `-NoDraft` is set, so you can read `review.md` before committing to a draft.
+5. Stops if any term repair is still undecided, because the timeline can still move and a draft built now would be wasted. `-SkipLexiconReview` overrides this.
+6. Compares the current Jianying fingerprint against `<JobRoot>\.roughcut-state\jianying-fingerprint.json`. On a mismatch, or with `-ForceStaging`, it builds a throwaway staging draft in the job folder, deletes it on success, and records the new fingerprint. A staging failure aborts before the homepage index is touched.
+7. Refuses to continue while `JianyingPro.exe` is running, then registers the real draft named `<JobName>-roughcut` unless `-DraftName` overrides it.
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `-JobName` | required | Job folder name and default draft name |
+| `-Media` | required | Footage folder; UNC paths are supported |
+| `-WikiText` / `-WikiFile` | one of them | Procedure as pasted text or as a file |
+| `-JobRoot` | `.\jobs` | Where job folders and the fingerprint state live |
+| `-Lexicon` | none | Glossary for post-recognition repair |
+| `-Drafts` | `D:\Software\JianyingPro Drafts` | Jianying drafts root |
+| `-UserData` | `%LOCALAPPDATA%\JianyingPro\User Data` | Homepage index location |
+| `-FfmpegBin` | none | Prepend a portable FFmpeg to `PATH` for this run |
+| `-Workers` | `6` | Parallel probe and audio-extraction workers |
+| `-BatchSize` / `-ChunkLength` / `-CpuThreads` | `2` / `10` / auto | Recognition throughput tuning |
+| `-ReuseTakes` | off | Reuse `takes.json` and skip recognition entirely |
+| `-NoDraft` | off | Stop after analysis |
+| `-ForceStaging` | off | Validate encoding even when the fingerprint matches |
+| `-SkipLexiconReview` | off | Build the draft even with undecided term repairs |
+
+Re-running a job after editing `wiki.md` or `corrections.json` is cheap with `-ReuseTakes`: recognition is the slow part, and matching plus export takes seconds.
+
 ## How it works
 
 The automatic pipeline is intentionally evidence-driven:
@@ -147,7 +209,7 @@ The automatic pipeline is intentionally evidence-driven:
 2. **Probe every media file:** use ffprobe to record duration, audio presence, frame size, and stream information. Every discovered MP4/MOV must enter the plan or an actionable report.
 3. **Extract audio in parallel:** in `auto` mode, FFmpeg creates temporary mono 16 kHz WAV tracks concurrently. The original video is never changed.
 4. **Transcribe locally:** faster-whisper `small` produces word timestamps with language pinned to `zh` by default. Start/end markers define source cut points and the short post-start phrase becomes the spoken step label.
-5. **Check procedure relevance:** the spoken label is scored against every written step. Empty speech, filler, or speech unrelated to the procedure is rejected as matching evidence.
+5. **Check procedure relevance:** the spoken label is scored against every written step. Empty speech, filler, or speech unrelated to the procedure is rejected as matching evidence. Weakly matched takes get pronunciation-aware repair proposals for review instead of a silent rewrite.
 6. **Use the filename only when needed:** if no procedure-related spoken label exists, parse the filename for an action, object, sequence, and part number, then score that label against the procedure.
 7. **Keep unmarked footage for review:** if neither speech nor filename relates to the procedure, do not guess and do not rename the source file. Keep the full clip at the end of the timeline, set its edit-plan/FCPXML display label to `待确认（无报幕且无有效文件名）— original-name`, add the `待确认` review text track, and explain the reason in `review.md`.
 8. **Build the timeline:** select source in/out ranges, order clips by procedure step and part number, preserve repeated takes, and add review markers for conflicts.
@@ -155,6 +217,77 @@ The automatic pipeline is intentionally evidence-driven:
 10. **Create editor-native projects:** Final Cut Pro uses FCPXML. Windows Jianying uses a separate encrypted-draft and homepage-registration stage.
 
 This design prevents a silent but dangerous failure mode: arranging unlabeled footage purely because it happened to be recorded near a written step.
+
+## Repository layout and algorithms
+
+```text
+skills/rough-cut-wiki-video/
+├── SKILL.md
+├── agents/openai.yaml
+├── assets/*.schema.json
+├── assets/models/faster-whisper-small/   (downloaded, not in Git)
+├── references/*.md
+└── scripts/
+    ├── roughcut.py
+    ├── run-job.ps1
+    ├── setup.ps1 / setup.sh
+    ├── download-model.ps1 / .sh
+    └── roughcut/
+        ├── core.py
+        ├── media.py
+        ├── lexicon.py
+        ├── exporters.py
+        ├── pipeline.py
+        └── jianying10.py
+```
+
+### Skill definition and docs
+
+| File | Role |
+| --- | --- |
+| `SKILL.md` | The only file the agent reads to decide whether and how to use this Skill. Holds the trigger description, the workflow it must follow, and the rules it must not break. |
+| `agents/openai.yaml` | Agent metadata for installers that expect a manifest. |
+| `assets/*.schema.json` | JSON Schemas for a wiki step, a take's evidence, and an edit segment. Useful for validating output or building your own consumer. |
+| `references/*.md` | Deep-dive docs loaded on demand: `usage.md` for every flag, `schemas.md` for field-level output structure, `jianying10.md` for draft internals, `filename-guide.md`, `shooting-guide.md`, and `speech-recognition.md`. |
+
+### Scripts
+
+`roughcut.py` is the CLI front end with three subcommands: `doctor` reports environment capability, `run` performs analysis and export, and `fingerprint` prints the Jianying/writer signature. It only parses arguments and delegates.
+
+`pipeline.py` orchestrates one `run`: read the procedure, batch-analyze media, apply corrections, build the plan, then write every output file. It is the place to look for what gets written and in what order.
+
+`media.py` handles everything that touches media or the speech model.
+
+- Discovery walks the folder for `.mp4`, `.mov`, `.m4v`, `.avi`, `.mkv`.
+- `ffprobe` reads duration, audio presence, and stream info. A file that cannot be probed falls back to placeholder metadata and a warning rather than aborting the batch.
+- Audio extraction runs FFmpeg concurrently through a thread pool into temporary mono 16 kHz WAVs. This is pure I/O wait, so parallelism helps a lot; on a 16-file batch it cut extraction from about 93 s to 16 s.
+- Transcription loads the model exactly once via `lru_cache` and wraps it in faster-whisper's `BatchedInferencePipeline`. Language is pinned to `zh`, VAD filtering is on, and word timestamps are requested. `beam_size` deliberately stays at the library default: greedy decoding turned `移除底壳` into `一处地壳` for almost no time saved.
+- Recognition remains the dominant cost. It is roughly a fixed per-file overhead on CPU, so total time scales with file count more than with total duration.
+
+`core.py` holds the text logic and no I/O.
+
+- Traditional characters are folded to Simplified through a 265-entry translation table before any comparison, because Whisper freely emits `裝`/`殼`/`絲` while the procedure is written in Simplified.
+- Take segmentation scans word timestamps for start markers (`三二一开始`, `321走`, a bare `开始`) and isolated end markers (`OK`, `过`, `可以`, `好了`, `结束`). Matching is anchored to a whole utterance, so `开始拆卸` and `可以安装` are not mistaken for markers. The short phrase right after a start marker becomes the spoken step label.
+- Filename parsing extracts a sequence number, action label, and part number, and rejects camera defaults such as `DJI_0001` or `C0001` as meaningless.
+- Matching scores a label against a step with character bigrams plus single action characters, minus a small stop list. The score is `overlap / min(len(a), len(b))` with a `0.34` threshold. Qualified steps are then ranked by **absolute shared-term count** before score, which is what stops a short step like `安装底壳` from stealing a take that belongs to `安装底壳固定螺丝并预锁紧` — the short step would otherwise win on ratio alone because the take contains all of it.
+
+`lexicon.py` repairs recognized terms after transcription, in two layers described under [Two-layer term repair](#two-layer-term-repair). Layer 1 compares characters and applies automatically; layer 2 adds pronunciation and only proposes. Both slide windows of length *n−1*, *n*, and *n+1* and score with `difflib.SequenceMatcher`, and neither ever inserts or deletes text, so a wrong glossary cannot lengthen a caption. Running after decoding is deliberate: Whisper's `hotwords` truncate silently at 223 tokens, so a real glossary cannot be passed that way, whereas post-repair has no size ceiling and costs milliseconds.
+
+`exporters.py` writes `wiki-subtitles.srt`, `review-subtitles.srt`, `timeline.fcpxml`, and the optional 720p preview render. FCPXML references original media by path and carries `文档字幕` and `待确认` as separate title lanes.
+
+`jianying10.py` builds the native draft. It discovers the installation from the registry uninstall keys, falling back to parsing `UninstallString` when `InstallLocation` is empty, and picks the newest valid version folder when an updater has removed the one you named. `fingerprint()` hashes the registry version, install path, `videoeditor.dll` size and mtime, and the writer library version — that is the value gating staging validation. Draft creation writes a real timeline, matches the project ID across `draft_content.json` and `draft_meta_info.json`, encrypts through the local DLL, backs up `root_meta_info.json`, and adds the homepage entry.
+
+### Why a local DLL is involved
+
+Jianying 10/11 no longer stores drafts as plaintext JSON; `draft_content.json` is encrypted. `videoeditor.dll` inside your Jianying installation is a signed 63 MB Windows binary that exports the encrypt/decrypt routines. The writer library loads it with `ctypes.WinDLL`, marshals MSVC `std::string` structures, and calls those exports in an isolated subprocess by default. Nothing is reverse-engineered or reimplemented, and no key is shipped — the Skill borrows your own installation's code, which is why the draft always matches your exact Jianying build and why a version change is worth revalidating.
+
+### Setup and helper scripts
+
+`setup.ps1` / `setup.sh` create `.venv` and install dependencies. The `full` profile adds faster-whisper, ONNX Runtime, the pinned `pyJianYingDraft` fork, and the `small` model; `core` gives filename-only processing with no speech recognition. `download-model.ps1` / `.sh` fetch and verify the model separately, since it is about 486 MB and exceeds GitHub's per-file limit. `run-job.ps1` is the end-to-end wrapper described above.
+
+### Files not in Git
+
+`assets/models/faster-whisper-small/` and `.venv/` are created by setup. Job folders, `.roughcut-state/`, and `.roughcut-backups/` are runtime data and belong outside the repository.
 
 ## How to record footage
 
@@ -249,6 +382,98 @@ Chinese markers such as `步骤一`, `步骤二`, and `步骤三`, or a normal n
 
 The agent may improve sentence flow for reading, but it must not invent objects, ingredients, parts, counts, values, directions, or safety claims that are absent from the supplied procedure.
 
+## Optional inputs: glossary and corrections
+
+Both are optional, hand-written, and never generated by the pipeline. Neither is required for a normal run.
+
+### Glossary (`--lexicon`)
+
+A plain UTF-8 text file, one term per line. Reusable across every job, so it is worth maintaining long-term.
+
+```text
+热端风扇
+底壳固定螺丝
+挤出机组件
+```
+
+Terms shorter than three characters and lines without Chinese characters are ignored, because short fuzzy hits are more often coincidence than a real correction. A large glossary is safe: cost is linear in term count and stays in the millisecond range.
+
+A glossary is not the only repair vocabulary, and not the leading one: **the procedure's own wording takes priority**. A glossary describes a whole product line, so it frequently lacks the exact phrase being filmed. On real footage a cue misheard as 抵扣布丁螺丝 could only be recovered from the procedure's own 底壳固定螺丝, which was absent from all 530 glossary entries. Repair therefore still works with no glossary at all.
+
+### Corrections (`--corrections`)
+
+A JSON file keyed by source filename, used as the highest-priority evidence when recognition simply cannot be salvaged for one clip. It is per-job and disposable — once that footage is cut, the file has no further use and should not be carried into the next job.
+
+```json
+{
+  "C9451.MP4": {
+    "manual_step_id": "step-005",
+    "manual_label": "再次锁紧底壳固定螺丝"
+  }
+}
+```
+
+`manual_step_id` pins the clip to a step outright. `manual_label` supplies a replacement label that goes through normal scoring. `run-job.ps1` picks up `corrections.json` from the job folder automatically when present.
+
+Reach for it only after the cheaper fixes: re-record a shorter label, rename the file with a meaningful action name, or add the misheard term to the glossary. A correction fixes exactly one clip in one job; a glossary entry fixes that term everywhere, forever.
+
+## Two-layer term repair
+
+Chinese cue-recognition errors are overwhelmingly homophones, and that single fact drives the whole design.
+
+### Why character similarity is not enough
+
+Character distance is blind to homophones. On the real errors, the overlap is literally zero:
+
+| Span → term | Character | Pinyin | Reality |
+| --- | --- | --- | --- |
+| 抵扣布丁 → 底壳固定 | 0.00 | 0.76 | should be fixed |
+| 顶核 → 底壳 | 0.00 | 0.60 | should be fixed |
+| 半动 → 安装 | 0.00 | 0.53 | should be fixed |
+| 热端风扇 → 冷端风扇 | 0.75 | 0.87 | must never be changed |
+| 紧抵扣 → 进气口 | 0.00 | 0.88 | must never be changed |
+
+### Why pronunciation similarity is not enough either
+
+Look at the last two rows. The semantically opposite pair 热端风扇/冷端风扇 (hot-end vs cold-end fan) scores 0.87, higher than the correct repair 抵扣布丁 → 底壳固定 at 0.76. **No threshold separates them.** Applying by score alone would eventually rewrite "hot end" as "cold end" and invert the caption's meaning.
+
+Pronunciation is therefore good at *finding* candidates and incapable of *deciding* them.
+
+### How the layers divide the work
+
+**Layer 1 (Python, automatic)** applies only repairs that are already close character-for-character, at 0.75 (0.85 for three-character terms). That band is safe unattended.
+
+**Layer 2 (agent review, never automatic)** adds pronunciation comparison for recall and writes its findings to `lexicon-review.json` for a decision. The reviewer has what a score cannot: the procedure text and its meaning. It sees immediately that the steps say 底壳固定螺丝 and never mention 底座锁定螺丝, and that a cue saying 再次锁紧 (tighten again) cannot possibly be 移除 (remove).
+
+Only takes matched below `--review-confidence` (0.70) produce proposals, since a confidently matched take has nothing worth changing, and proposals that land on the same step are dropped because they cannot alter the cut. On the real 12-take shoot those two filters reduced the review to 3 takes and 5 candidates.
+
+### What it actually recovered
+
+Real take C9451 was heard as `再次锁紧抵扣布丁螺丝1`, matched no step at all, and could only be parked at the end of the timeline as `待确认`. Layer 2 offered three candidates:
+
+| Suggestion | Pinyin | Resulting step | Confidence |
+| --- | --- | --- | --- |
+| 抵扣布丁螺丝 → 底壳固定螺丝 | 0.84 | step-004 安装底壳固定螺丝并预锁紧 | 0.75 |
+| 抵扣布丁螺丝 → 底座锁定螺丝 | 0.79 | step-004 | 0.46 |
+| 紧抵扣布丁螺丝 → 移除底壳固定螺丝 | 0.72 | step-001 移除底壳固定螺丝 | **1.00** |
+
+Note the third: it reaches a perfect 1.00, higher than the correct answer's 0.75. **Picking by score picks wrong.** The cue explicitly says 再次锁紧, so 移除 is semantically impossible — precisely the judgement that requires reading the procedure. Accepting the first entry turned this clip from unmatched into a correct match.
+
+### The confirmation loop
+
+```powershell
+# 1. After analysis, set every decision to accept or reject in
+#    <output>\lexicon-review.json, optionally with a decision_note.
+# 2. Re-run with --reuse-takes; recognition is skipped, so this takes seconds.
+```
+
+Two properties matter:
+
+- **Reversible.** Repairs are re-applied from the pre-review text on every run, so flipping an entry back to `reject` restores the original transcript and leaves no residue.
+- **Decisions persist.** A decided proposal is kept in the file even when it no longer regenerates. Without that, accepting a repair removes the misheard span it was found by, and the next run would silently revert it.
+
+`run-job.ps1` stops before building a draft while proposals are undecided, because the timeline can still move and the draft would be wasted. Use `-SkipLexiconReview` to override. Without `pypinyin` installed, repair degrades to character comparison only and says so in `review.md`.
+
 ## Matching and edit rules
 
 Evidence priority:
@@ -310,6 +535,17 @@ Then save your work and fully exit Jianying. Register the final project:
 
 Use `--install-dir "D:\software\JianyingPro"` only when automatic discovery cannot locate a custom installation.
 
+### What registration actually does
+
+"Registration" is entirely local. There is no account, license, or network call. Adding `--user-data` makes the tool:
+
+1. Create `<drafts>\<name>\` containing `draft_content.json` (the timeline), `draft_meta_info.json` (project ID and media references), and the auxiliary files Jianying expects.
+2. Encrypt both JSON files by calling `videoeditor.dll` from your installed Jianying, so the bytes match what that exact build can read.
+3. Copy `<user-data>\...\root_meta_info.json` into `<drafts>\.roughcut-backups` before modifying it.
+4. Append an entry to that index with the draft's path, project ID, name, and timestamps. This index is what Jianying's homepage lists — a folder that is not in it stays invisible no matter how correct its contents are.
+
+Without `--user-data`, steps 1 and 2 still happen but 3 and 4 do not, which is exactly what makes staging safe.
+
 Safety behavior:
 
 - Registration is refused while `JianyingPro.exe` is running.
@@ -340,7 +576,7 @@ Recognition accuracy is not a fixed percentage. It depends heavily on microphone
 
 Speech defaults to `--language zh`. Auto-detection is slower and can misread short, noisy cues as other languages. Pass `--language ""` only when the footage is not Chinese. Traditional characters in the transcript are normalized to Simplified for matching.
 
-If local recognition is weak, first shorten the label, speak it immediately after the start cue, move the microphone closer, and use a meaningful filename as independent evidence. Pass `--lexicon` with one term per line for conservative post-recognition repair; do not use Whisper `hotwords`, which silently truncate at 223 tokens. For difficult dialects or specialist vocabulary, a cloud ASR service can still be evaluated later. See [speech-recognition.md](skills/rough-cut-wiki-video/references/speech-recognition.md).
+If local recognition is weak, first shorten the label, speak it immediately after the start cue, move the microphone closer, and use a meaningful filename as independent evidence. Pass `--lexicon` with one term per line for conservative post-recognition repair; do not use Whisper `hotwords`, which silently truncate at 223 tokens. Homophone errors are invisible to character comparison and are handled by the reviewed pinyin layer in [Two-layer term repair](#two-layer-term-repair). For difficult dialects or specialist vocabulary, a cloud ASR service can still be evaluated later. See [speech-recognition.md](skills/rough-cut-wiki-video/references/speech-recognition.md).
 
 Full setup downloads the model once into:
 
@@ -381,6 +617,7 @@ roughcut.py run
   [--chunk-length 10]
   [--cpu-threads N]
   [--lexicon glossary.txt]
+  [--review-confidence 0.70]
   [--preview]
   [--corrections corrections.json]
   [--reuse-takes]
@@ -413,28 +650,50 @@ Omit `--user-data` for staging. Add it only after Jianying has fully exited.
 
 ## Output reference
 
+A full job tree looks like this. Only `output/` is produced by the `run` command; the rest is either your input or state written by the job script.
+
 ```text
-output/
-├── wiki-source.md
-├── wiki-steps.json
-├── takes.json
-├── edit-plan.json
-├── review.md
-├── wiki-subtitles.srt
-├── review-subtitles.srt
-├── timeline.fcpxml
-└── review-preview.mp4
+jobs/<JobName>/
+├── wiki.md              input, hand-written or generated from -WikiText
+├── corrections.json     input, optional, per-job and disposable
+└── output/
+    ├── wiki-source.md
+    ├── wiki-steps.json
+    ├── takes.json
+    ├── edit-plan.json
+    ├── review.md
+    ├── lexicon-review.json
+    ├── wiki-subtitles.srt
+    ├── review-subtitles.srt
+    ├── timeline.fcpxml
+    └── review-preview.mp4
+jobs/.roughcut-state/
+└── jianying-fingerprint.json   state, keep
 ```
 
-- `wiki-source.md`: exact saved procedure input, whether it was pasted or loaded from a file.
-- `wiki-steps.json`: normalized action steps and caption facts.
-- `takes.json`: media probes, labels, timestamps, optional lexicon repairs, and warnings.
-- `edit-plan.json`: application-independent source ranges, ordering, captions, and match status.
-- `review.md`: missing steps, ambiguous clips, fallbacks, and timeline summary.
-- `wiki-subtitles.srt`: formal procedure-derived captions.
-- `review-subtitles.srt`: `待确认` markers.
+### Read these
+
+- `review.md`: the first thing to open. Missing steps, `待确认` clips, evidence fallbacks, pending and applied term repairs, and a timeline summary.
+- `lexicon-review.json`: term repairs awaiting a decision; they take effect only after you decide and re-run. See [Two-layer term repair](#two-layer-term-repair). Verdicts are stored here, so keep the file for the duration of the job.
+- `review-preview.mp4`: optional 720p render for a fast visual sanity check. Not an editable master.
+
+### Keep these
+
+- `edit-plan.json`: the portable source of truth — source in/out ranges, ordering, captions, and match status. Everything else can be regenerated from it, and it outlives any Jianying format change.
 - `timeline.fcpxml`: editable interchange for Final Cut Pro and compatible editors.
-- `review-preview.mp4`: optional 720p review render; not the editable master.
+- `wiki-subtitles.srt`: formal procedure-derived captions.
+- `jianying-fingerprint.json`: records the validated Jianying signature. Deleting it only costs one extra staging validation.
+
+### Intermediate, safe to delete
+
+- `wiki-source.md`: the procedure input saved verbatim, kept for traceability.
+- `wiki-steps.json`: normalized steps and caption facts.
+- `takes.json`: per-file probes, labels, timestamps, glossary repairs, and warnings. Worth keeping if you plan to re-run with `--reuse-takes`, since it is what lets you skip recognition.
+- `review-subtitles.srt`: `待确认` markers only; drop it once the review pass is done.
+
+### Cleaned up automatically
+
+Temporary WAV tracks are deleted after recognition. A staging draft is deleted as soon as validation passes. `root_meta_info.json` backups accumulate in `<drafts>\.roughcut-backups` and can be pruned once drafts open correctly.
 
 The analysis command deliberately does not create a folder named `jianying-draft`; a plaintext look-alike is easy to copy incorrectly and will not appear on current Jianying homepages. Use the separate `jianying10` command to create a real encrypted and registered project.
 

@@ -5,12 +5,28 @@ Hotwords cannot carry a real glossary: faster-whisper truncates them at
 first few entries. Repairing the transcript afterwards has no such ceiling, so
 an arbitrarily large glossary stays usable at negligible cost and without
 biasing the decoder.
+
+Two bands exist, because character similarity and pronunciation similarity fail
+in opposite ways:
+
+``repair`` is the automatic band. It only rewrites spans that are already close
+character-for-character, which is safe enough to apply unattended.
+
+``propose`` is the reviewed band, and it adds pronunciation comparison. Whisper's
+Chinese mistakes are overwhelmingly homophones, which character distance cannot
+see at all: on real footage 抵扣布丁 for 底壳固定 scores 0.00 by characters and
+0.76 by pinyin. Pronunciation alone cannot be trusted either, since the opposites
+热端风扇/冷端风扇 reach 0.87 and the wrong-but-plausible 紧抵扣/进气口 reaches
+0.88 — higher than the correct repair. No threshold separates them, so proposals
+are never applied automatically; they are handed to an agent that can weigh them
+against the procedure text.
 """
 
 from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 
 # Below this length a fuzzy hit is more likely to be coincidence than a typo.
@@ -19,6 +35,10 @@ MIN_TERM_LENGTH = 3
 SHORT_TERM_LENGTH = 3
 SHORT_TERM_THRESHOLD = 0.85
 DEFAULT_THRESHOLD = 0.75
+# Floors for the reviewed band. Either channel may qualify a span, because a
+# homophone scores near zero on characters and a typo scores low on pinyin.
+PROPOSE_CHAR_THRESHOLD = 0.60
+PROPOSE_PINYIN_THRESHOLD = 0.70
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
@@ -39,6 +59,27 @@ def load_terms(path: Path | None) -> list[str]:
 
 def _threshold_for(term: str) -> float:
     return SHORT_TERM_THRESHOLD if len(term) <= SHORT_TERM_LENGTH else DEFAULT_THRESHOLD
+
+
+def pinyin_available() -> bool:
+    """Pronunciation comparison is optional; without it only characters are used."""
+    try:
+        import pypinyin  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@lru_cache(maxsize=4096)
+def _syllables(text: str) -> tuple[str, ...]:
+    """One syllable per character, so a window's pinyin is a cheap slice-join."""
+    from pypinyin import Style, lazy_pinyin
+
+    return tuple(lazy_pinyin(text, style=Style.NORMAL, errors=lambda item: list(item)))
+
+
+def _sound(text: str) -> str:
+    return "".join(_syllables(text))
 
 
 def _candidates(text: str, terms: list[str]) -> list[tuple[float, int, int, str, str]]:
@@ -105,3 +146,53 @@ def repair(text: str | None, terms: list[str]) -> tuple[str | None, list[dict]]:
     for (start, end), change in sorted(zip(taken, applied), key=lambda pair: -pair[0][0]):
         text = text[:start] + change["corrected"] + text[end:]
     return text, applied
+
+
+def propose(text: str | None, terms: list[str], *, use_pinyin: bool = True) -> list[dict]:
+    """Suggest repairs for review; the caller decides whether to apply them.
+
+    Returns one suggestion per glossary term at most, each identified by the exact
+    substring it would replace so the caller can apply it with a plain string
+    replacement and stay immune to offset drift.
+    """
+    if not text or not terms:
+        return []
+    sound = use_pinyin and pinyin_available()
+    per_char = _syllables(text) if sound else ()
+    suggestions: list[dict] = []
+    for term in terms:
+        if term in text:
+            continue
+        size = len(term)
+        term_sound = _sound(term) if sound else ""
+        best: tuple[float, float, float, str] | None = None
+        for window in {size - 1, size, size + 1}:
+            if window < MIN_TERM_LENGTH or window > len(text):
+                continue
+            for start in range(len(text) - window + 1):
+                found = text[start:start + window]
+                if not _CJK.search(found) or found == term:
+                    continue
+                char = SequenceMatcher(None, found, term).ratio()
+                heard = (
+                    SequenceMatcher(None, "".join(per_char[start:start + window]), term_sound).ratio()
+                    if sound else 0.0
+                )
+                if char < PROPOSE_CHAR_THRESHOLD and heard < PROPOSE_PINYIN_THRESHOLD:
+                    continue
+                rank = max(char, heard)
+                if best is None or rank > best[0]:
+                    best = (rank, char, heard, found)
+        # Anything the automatic band would already handle is not worth reviewing.
+        if best is None or best[1] >= _threshold_for(term):
+            continue
+        rank, char, heard, found = best
+        suggestions.append({
+            "found": found,
+            "suggested": term,
+            "char_score": round(char, 3),
+            "pinyin_score": round(heard, 3),
+            "rank": round(rank, 3),
+        })
+    suggestions.sort(key=lambda item: -item["rank"])
+    return suggestions

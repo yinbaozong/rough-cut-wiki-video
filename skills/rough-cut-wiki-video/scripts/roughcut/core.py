@@ -125,6 +125,30 @@ def parse_wiki(text: str) -> list[dict]:
     ]
 
 
+def terms_from_steps(steps: list[dict]) -> list[str]:
+    """Repair vocabulary taken from the procedure itself.
+
+    A user glossary describes the whole product line, so it often lacks the exact
+    wording of the step being filmed: on real footage the misheard 抵扣布丁螺丝
+    could only be recovered from the procedure's own 底壳固定螺丝. Matching cares
+    about step vocabulary, which makes the steps the more relevant source.
+    """
+    terms: dict[str, None] = {}
+    for step in steps:
+        for chunk in re.split(r"[，,。；;、\s]+", step.get("wiki_text", "")):
+            chunk = re.sub(r"[^\u4e00-\u9fff]", "", chunk)
+            if len(chunk) >= 3:
+                terms.setdefault(chunk, None)
+            # Also index the object without its leading verb so that "移除底壳固定
+            # 螺丝" can repair a take that only garbled "底壳固定螺丝".
+            stripped = chunk
+            while len(stripped) > 3 and stripped[0] in ACTION_HINTS:
+                stripped = stripped[1:]
+            if len(stripped) >= 3:
+                terms.setdefault(stripped, None)
+    return list(terms)
+
+
 def _caption_text(line: str) -> str:
     polished = line.replace(",", "，").replace(":", "：").strip()
     polished = polished.rstrip("，；;。 ")
@@ -155,36 +179,38 @@ def _score(label: str, step: dict) -> float:
     return overlap / max(1, min(size_a, size_b))
 
 
+def best_match(label: str | None, steps: list[dict]) -> tuple[float, dict | None]:
+    """Pick the step sharing the most terms, not merely the best ratio.
+
+    A short step like "安装底壳" scores a perfect ratio against "安装底壳固定螺丝"
+    because the take contains all of it, which would steal takes from the more
+    specific "安装底壳固定螺丝并预锁紧". Ranking qualified steps by absolute shared
+    terms keeps the specific step ahead.
+    """
+    if not label or not steps:
+        return 0.0, None
+    ranked = [(_score(label, step), _shared(label, step)[0], step) for step in steps]
+    qualified = [item for item in ranked if item[0] >= MATCH_THRESHOLD] or ranked
+    qualified.sort(key=lambda item: (item[1], item[0]), reverse=True)
+    score, _overlap, step = qualified[0]
+    return score, step
+
+
 def build_edit_plan(steps: list[dict], takes: list[dict]) -> dict:
     segments = []
     matched = set()
     unmarked_files = []
 
-    def best_match(label: str | None) -> tuple[float, dict | None]:
-        """Pick the step sharing the most terms, not merely the best ratio.
-
-        A short step like "安装底壳" scores a perfect ratio against "安装底壳固定
-        螺丝" because the take contains all of it, which would steal takes from
-        the more specific "安装底壳固定螺丝并预锁紧". Ranking qualified steps by
-        absolute shared terms keeps the specific step ahead.
-        """
-        if not label:
-            return 0.0, None
-        ranked = [(_score(label, step), _shared(label, step)[0], step) for step in steps]
-        if not ranked:
-            return 0.0, None
-        qualified = [item for item in ranked if item[0] >= MATCH_THRESHOLD] or ranked
-        qualified.sort(key=lambda item: (item[1], item[0]), reverse=True)
-        score, _overlap, step = qualified[0]
-        return score, step
+    def best_match_local(label: str | None) -> tuple[float, dict | None]:
+        return best_match(label, steps)
 
     for source_index, take in enumerate(takes):
         evidence = parse_filename(Path(take["source_file"]))
         forced = next((candidate for candidate in steps if candidate["id"] == take.get("manual_step_id")), None)
-        manual_score, manual_step = best_match(take.get("manual_label"))
-        voice_score, voice_step = best_match(take.get("spoken_label"))
-        filename_score, filename_step = best_match(evidence["label"])
-        ocr_score, ocr_step = best_match(take.get("ocr_text"))
+        manual_score, manual_step = best_match_local(take.get("manual_label"))
+        voice_score, voice_step = best_match_local(take.get("spoken_label"))
+        filename_score, filename_step = best_match_local(evidence["label"])
+        ocr_score, ocr_step = best_match_local(take.get("ocr_text"))
         threshold = MATCH_THRESHOLD
 
         selected_source = None

@@ -32,7 +32,8 @@ param(
     [int]$CpuThreads = 0,
     [switch]$ReuseTakes,
     [switch]$NoDraft,
-    [switch]$ForceStaging
+    [switch]$ForceStaging,
+    [switch]$SkipLexiconReview
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,6 +95,23 @@ Write-Host ("      done in {0:n1}s" -f ((Get-Date) - $started).TotalSeconds) -Fo
 if ($NoDraft) {
     Write-Host "Skipping Jianying draft (-NoDraft). Review $output\review.md" -ForegroundColor Yellow
     return
+}
+
+# Pinyin similarity finds real homophone errors but cannot tell them from wrong
+# terms that merely sound alike, so an undecided proposal means the timeline may
+# still move. Building a draft now would just be thrown away.
+$reviewFile = Join-Path $output 'lexicon-review.json'
+if (-not $SkipLexiconReview -and (Test-Path -LiteralPath $reviewFile)) {
+    $pending = (Get-Content -LiteralPath $reviewFile -Raw -Encoding utf8 | ConvertFrom-Json).pending
+    if ($pending -gt 0) {
+        Write-Host ''
+        Write-Host "Stopping before the draft: $pending term repair(s) need a decision." -ForegroundColor Yellow
+        Write-Host "  1. Open $reviewFile and set each decision to accept or reject."
+        Write-Host '  2. Re-run this command with -ReuseTakes to apply them in seconds.'
+        Write-Host '  Use -SkipLexiconReview to build the draft without deciding.'
+        Write-Host "  Details are also listed in $output\review.md"
+        return
+    }
 }
 
 $plan = Join-Path $output 'edit-plan.json'

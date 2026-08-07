@@ -9,7 +9,7 @@ python -m venv $VenvPath
 $PythonPath = Join-Path $VenvPath 'Scripts\python.exe'
 & $PythonPath -m pip install --upgrade pip
 if ($Profile -eq 'full') {
-  & $PythonPath -m pip install faster-whisper onnxruntime socksio
+  & $PythonPath -m pip install faster-whisper onnxruntime socksio pypinyin
   & $PythonPath -m pip install 'git+https://github.com/aoguai/pyJianYingDraft.git@80d521b28049bd81288b5e6ee85de310c3ac8d86'
   & (Join-Path $SkillRoot 'scripts\download-model.ps1')
 }
