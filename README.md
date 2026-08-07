@@ -8,6 +8,8 @@
 
 The Skill analyzes spoken take markers, short spoken step labels, filenames, procedure order, and media timing. Speech is pinned to Simplified Chinese by default. Term repair runs after recognition in two layers: a conservative automatic pass, plus a pronunciation-aware pass that proposes homophone fixes for review rather than applying them. Frame extraction and OCR are disabled by design. It keeps the original 4K files untouched and produces an edit plan, editable captions, SRT, FCPXML, a review preview, and—on Windows—a native encrypted Jianying/CapCut China desktop draft with real source cut points.
 
+Current Skill version: **0.3.0**. Run `python scripts/roughcut.py --version` to confirm the version actually installed on a machine. Every job also records it in terminal output, `edit-plan.json`, and `review.md` for later traceability.
+
 ## Contents
 
 - [What it produces](#what-it-produces)
@@ -108,6 +110,12 @@ Use `-Profile core` or `./scripts/setup.sh core` only when you deliberately want
 ```
 
 A healthy report shows `ffmpeg`/`ffprobe` found, `faster_whisper` importable, the `small` model present, `pyJianYingDraft` importable, `frame_ocr: disabled`, and `pinyin_repair: True`.
+
+Confirm the installed version:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\roughcut.py --version
+```
 
 ### 4. First-run checklist
 
@@ -271,7 +279,7 @@ skills/rough-cut-wiki-video/
 - Filename parsing extracts a sequence number, action label, and part number, and rejects camera defaults such as `DJI_0001` or `C0001` as meaningless.
 - Matching scores a label against a step with character bigrams plus single action characters, minus a small stop list. The score is `overlap / min(len(a), len(b))` with a `0.34` threshold. Qualified steps are then ranked by **absolute shared-term count** before score, which is what stops a short step like `安装底壳` from stealing a take that belongs to `安装底壳固定螺丝并预锁紧` — the short step would otherwise win on ratio alone because the take contains all of it.
 
-`lexicon.py` repairs recognized terms after transcription, in two layers described under [Two-layer term repair](#two-layer-term-repair). Layer 1 compares characters and applies automatically; layer 2 adds pronunciation and only proposes. Both slide windows of length *n−1*, *n*, and *n+1* and score with `difflib.SequenceMatcher`, and neither ever inserts or deletes text, so a wrong glossary cannot lengthen a caption. Running after decoding is deliberate: Whisper's `hotwords` truncate silently at 223 tokens, so a real glossary cannot be passed that way, whereas post-repair has no size ceiling and costs milliseconds.
+`lexicon.py` repairs recognized terms after transcription, in two layers described under [Two-layer term repair](#two-layer-term-repair). Layer 1 compares characters, gates each candidate on anchors and pronunciation, then applies automatically; layer 2 adds pronunciation for recall and only proposes. Both slide windows of length *n−1*, *n*, and *n+1* and score with `difflib.SequenceMatcher`, and neither ever inserts or deletes text, so a wrong glossary cannot lengthen a caption. Running after decoding is deliberate: Whisper's `hotwords` truncate silently at 223 tokens, so a real glossary cannot be passed that way, whereas post-repair has no size ceiling and costs milliseconds.
 
 `exporters.py` writes `wiki-subtitles.srt`, `review-subtitles.srt`, `timeline.fcpxml`, and the optional 720p preview render. FCPXML references original media by path and carries `文档字幕` and `待确认` as separate title lanes.
 
@@ -396,9 +404,13 @@ A plain UTF-8 text file, one term per line. Reusable across every job, so it is 
 挤出机组件
 ```
 
+The user prepares and supplies this file; the script does not generate it. **A job runs perfectly well without one**, and its absence is neither an error nor a degraded mode: the repair vocabulary comes primarily from the procedure, and the glossary only supplements it with wording the procedure abbreviates or omits.
+
 Terms shorter than three characters and lines without Chinese characters are ignored, because short fuzzy hits are more often coincidence than a real correction. A large glossary is safe: cost is linear in term count and stays in the millisecond range.
 
-A glossary is not the only repair vocabulary, and not the leading one: **the procedure's own wording takes priority**. A glossary describes a whole product line, so it frequently lacks the exact phrase being filmed. On real footage a cue misheard as 抵扣布丁螺丝 could only be recovered from the procedure's own 底壳固定螺丝, which was absent from all 530 glossary entries. Repair therefore still works with no glossary at all.
+**Why the procedure leads.** The narration is usually the procedure read aloud, which makes the procedure's own wording the vocabulary that actually matters. Real footage measures the gap directly: a cue misheard as 抵扣布丁螺丝 could only be recovered from the procedure's 底壳固定螺丝 at 0.839 by pronunciation, while 530 glossary entries offered 进气口 at 0.875 — a higher score for a term appearing nowhere in the procedure, so it can never match a step. Layer 2 therefore orders proposals by source, procedure first, and drops a glossary proposal covering the same span, which cut one take's candidates from six to two.
+
+So **a bigger glossary is not automatically a more accurate one**; it also adds noise. Its real value is supplying specialist nouns the procedure never spells out, not replacing the procedure.
 
 ### Corrections (`--corrections`)
 
@@ -441,23 +453,38 @@ Pronunciation is therefore good at *finding* candidates and incapable of *decidi
 
 ### How the layers divide the work
 
-**Layer 1 (Python, automatic)** applies only repairs that are already close character-for-character, at 0.75 (0.85 for three-character terms). That band is safe unattended.
+**Layer 1 (Python, automatic)** applies only repairs that are already close character-for-character, at 0.75 (0.85 for three-character terms), plus two safety gates. Nothing reviews this layer, which makes a false repair far worse than a missed one, so:
 
-**Layer 2 (agent review, never automatic)** adds pronunciation comparison for recall and writes its findings to `lexicon-review.json` for a decision. The reviewer has what a score cannot: the procedure text and its meaning. It sees immediately that the steps say 底壳固定螺丝 and never mention 底座锁定螺丝, and that a cue saying 再次锁紧 (tighten again) cannot possibly be 移除 (remove).
+1. **Anchor gate:** never rewrite a span overlapping a term the text already spells correctly. A vocabulary's own near-neighbours clear any character threshold, which makes already-correct text the most likely thing to be rewritten.
+2. **Sound gate:** compare only the characters that would *change* and require them to sound alike (0.7). Whisper's errors are phonetic; if it does not sound alike, it is not a mishearing but a different word.
 
-Only takes matched below `--review-confidence` (0.70) produce proposals, since a confidently matched take has nothing worth changing, and proposals that land on the same step are dropped because they cannot alter the cut. On the real 12-take shoot those two filters reduced the review to 3 takes and 5 candidates.
+Both gates are calibrated on real data. The user's 530-term glossary contains **77 pairs** of valid terms differing by one or two characters. Measured before the gates existed:
+
+| Input (already correct) | Rewritten to | With gates |
+| --- | --- | --- |
+| 更换冷端风扇 | 更换**热**端风扇 (opposite meaning) | unchanged |
+| 检查热端风扇 | **检主**热端风扇 (corrupts correct text) | unchanged |
+| 安装底壳固定螺丝 | **移除**底壳固定螺丝 (verb flipped, wrong step) | unchanged |
+| 安装热端风山 | 安装热端风**扇** (a genuine repair) | still repaired |
+
+At 0.7 the sound gate rejects **all 77** valid pairs while keeping every genuine mishearing, because real mishearings are near-exact homophone swaps (山/扇, 私/丝, 克/壳) with plenty of headroom. `冷`/`热` are leng/re and `山`/`扇` are both shan; on characters both are "one character out of four, 0.75", and only pronunciation separates them. Without `pypinyin` this layer is disabled outright rather than run unguarded.
+
+**Layer 2 (agent review, never automatic)** adds pronunciation comparison for recall and writes its findings to `lexicon-review.json` for a decision. The reviewer has what a score cannot: the procedure text and its meaning. It sees immediately that the steps say 底壳固定螺丝 and never mention 底座锁定螺丝, and that a cue saying 再次锁紧 (tighten again) cannot possibly be 移除 (remove). This layer stays permissive, gates included, because a reviewer can reject a bad suggestion but cannot recover one that was never offered.
+
+Only takes matched below `--review-confidence` (0.70) produce proposals, since a confidently matched take has nothing worth changing, and proposals that land on the same step are dropped because they cannot alter the cut.
 
 ### What it actually recovered
 
-Real take C9451 was heard as `再次锁紧抵扣布丁螺丝1`, matched no step at all, and could only be parked at the end of the timeline as `待确认`. Layer 2 offered three candidates:
+Real take C9451 was heard as `再次锁紧抵扣布丁螺丝1`, matched no step at all, and could only be parked at the end of the timeline as `待确认`. Both vocabulary sources produced candidates:
 
-| Suggestion | Pinyin | Resulting step | Confidence |
-| --- | --- | --- | --- |
-| 抵扣布丁螺丝 → 底壳固定螺丝 | 0.84 | step-004 安装底壳固定螺丝并预锁紧 | 0.75 |
-| 抵扣布丁螺丝 → 底座锁定螺丝 | 0.79 | step-004 | 0.46 |
-| 紧抵扣布丁螺丝 → 移除底壳固定螺丝 | 0.72 | step-001 移除底壳固定螺丝 | **1.00** |
+| Source | Suggestion | Pinyin | Resulting step | Confidence |
+| --- | --- | --- | --- | --- |
+| procedure | 抵扣布丁螺丝 → 底壳固定螺丝 | 0.84 | step-004 安装底壳固定螺丝并预锁紧 | 0.75 |
+| procedure | 紧抵扣布丁螺丝 → 移除底壳固定螺丝 | 0.72 | step-001 移除底壳固定螺丝 | **1.00** |
+| ~~glossary~~ | ~~紧抵扣 → 进气口~~ | ~~0.88~~ | — | — |
+| ~~glossary~~ | ~~抵扣布丁螺丝 → 底座锁定螺丝~~ | ~~0.79~~ | — | — |
 
-Note the third: it reaches a perfect 1.00, higher than the correct answer's 0.75. **Picking by score picks wrong.** The cue explicitly says 再次锁紧, so 移除 is semantically impossible — precisely the judgement that requires reading the procedure. Accepting the first entry turned this clip from unmatched into a correct match.
+Two things stand out. The second entry reaches a perfect 1.00, higher than the correct answer's 0.75, so **picking by score picks wrong**; the cue explicitly says 再次锁紧, making 移除 semantically impossible. The glossary entries — including the top-scoring 进气口 at 0.88 — are dropped by the same-span rule, because neither appears in the procedure and so neither can ever match a step. Candidates for this take fell from six to two, with the correct one first. Accepting it turned the clip from unmatched into a correct match.
 
 ### The confirmation loop
 
@@ -679,7 +706,7 @@ jobs/.roughcut-state/
 
 ### Keep these
 
-- `edit-plan.json`: the portable source of truth — source in/out ranges, ordering, captions, and match status. Everything else can be regenerated from it, and it outlives any Jianying format change.
+- `edit-plan.json`: the portable source of truth — including the generating `skill_version`, source in/out ranges, ordering, captions, and match status. Everything else can be regenerated from it, and it outlives any Jianying format change.
 - `timeline.fcpxml`: editable interchange for Final Cut Pro and compatible editors.
 - `wiki-subtitles.srt`: formal procedure-derived captions.
 - `jianying-fingerprint.json`: records the validated Jianying signature. Deleting it only costs one extra staging validation.

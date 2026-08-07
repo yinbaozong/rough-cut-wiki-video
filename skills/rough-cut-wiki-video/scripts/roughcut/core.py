@@ -10,6 +10,17 @@ CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 
 START_RE = re.compile(r"^(?:3\s*2\s*1|三\s*二\s*一|321)?\s*(?:开始|走)$", re.I)
 END_RE = re.compile(r"^(?:ok|过|可以|好了|结束)$", re.I)
 ACTION_HINTS = "安装拆卸移除取下连接插入拧紧松开调整校准打开关闭放置固定撕下拔出更换清洁检查"
+# Whole verbs, so a step's object can be indexed on its own. Removing characters
+# one at a time instead turned 取出底壳 into the meaningless 出底壳, which then
+# attracted repairs of unrelated text.
+ACTION_VERBS = (
+    "预锁紧", "安装", "拆卸", "移除", "取出", "取下", "卸下", "装上", "连接", "插入",
+    "拧紧", "松开", "锁紧", "调整", "校准", "打开", "关闭", "放置", "固定", "撕下",
+    "拔出", "更换", "清洁", "检查", "对准", "确认",
+)
+_VERBS_LONGEST_FIRST = tuple(sorted(ACTION_VERBS, key=len, reverse=True))
+# Below this length a term collides with unrelated text too easily to be useful.
+MIN_STEP_TERM_LENGTH = 3
 STEP_LABEL_PATTERN = r"(?:步骤\s*(?:\d+|[一二三四五六七八九十]+)|step\s*\d+)"
 EXPLICIT_STEP_PATTERN = rf"(?:\d+[.)、]|{STEP_LABEL_PATTERN}\s*[:：.,，]?)"
 
@@ -126,26 +137,26 @@ def parse_wiki(text: str) -> list[dict]:
 
 
 def terms_from_steps(steps: list[dict]) -> list[str]:
-    """Repair vocabulary taken from the procedure itself.
+    """Repair vocabulary taken from the procedure itself, which is the primary source.
 
-    A user glossary describes the whole product line, so it often lacks the exact
-    wording of the step being filmed: on real footage the misheard 抵扣布丁螺丝
-    could only be recovered from the procedure's own 底壳固定螺丝. Matching cares
-    about step vocabulary, which makes the steps the more relevant source.
+    The narration is the procedure read aloud, so the procedure's own wording is the
+    vocabulary that actually matters: on real footage the misheard 抵扣布丁螺丝 could
+    only be recovered from the procedure's 底壳固定螺丝, while a 530-term product-line
+    glossary offered the plausible but useless 底座锁定螺丝 instead. A glossary stays
+    worth supplying for terms the procedure abbreviates, but it is secondary.
     """
     terms: dict[str, None] = {}
     for step in steps:
         for chunk in re.split(r"[，,。；;、\s]+", step.get("wiki_text", "")):
             chunk = re.sub(r"[^\u4e00-\u9fff]", "", chunk)
-            if len(chunk) >= 3:
+            if len(chunk) >= MIN_STEP_TERM_LENGTH:
                 terms.setdefault(chunk, None)
-            # Also index the object without its leading verb so that "移除底壳固定
-            # 螺丝" can repair a take that only garbled "底壳固定螺丝".
-            stripped = chunk
-            while len(stripped) > 3 and stripped[0] in ACTION_HINTS:
-                stripped = stripped[1:]
-            if len(stripped) >= 3:
-                terms.setdefault(stripped, None)
+            # Also index the object alone, so "移除底壳固定螺丝" can repair a take that
+            # only garbled "底壳固定螺丝".
+            for verb in _VERBS_LONGEST_FIRST:
+                if chunk.startswith(verb) and len(chunk) - len(verb) >= MIN_STEP_TERM_LENGTH:
+                    terms.setdefault(chunk[len(verb):], None)
+                    break
     return list(terms)
 
 

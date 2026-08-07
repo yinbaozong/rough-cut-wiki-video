@@ -66,7 +66,12 @@ def main(argv=None) -> int:
         print(json.dumps(jianying_fingerprint(args.install_dir, draft_root=args.drafts), ensure_ascii=False, indent=2))
         return 0
     if args.command == "doctor":
-        capabilities = {"python": sys.version.split()[0], "ffmpeg": find_binary("ffmpeg"), "ffprobe": find_binary("ffprobe")}
+        capabilities = {
+            "skill_version": __version__,
+            "python": sys.version.split()[0],
+            "ffmpeg": find_binary("ffmpeg"),
+            "ffprobe": find_binary("ffprobe"),
+        }
         try:
             import faster_whisper  # noqa: F401
             capabilities["faster_whisper"] = True
@@ -98,6 +103,7 @@ def main(argv=None) -> int:
         review_confidence=args.review_confidence,
     )
     print(json.dumps({
+        "skill_version": __version__,
         "output": str(args.output.resolve()),
         "segments": len(plan["segments"]),
         "recognition": plan["recognition"],

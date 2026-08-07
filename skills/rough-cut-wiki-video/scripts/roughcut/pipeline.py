@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from . import __version__
 from .core import MATCH_THRESHOLD, best_match, build_edit_plan, parse_wiki, terms_from_steps
 from .exporters import render_preview, write_fcpxml, write_srt
 from .lexicon import load_terms, pinyin_available, propose
@@ -94,10 +95,19 @@ def _apply_decisions(takes: list[dict], decisions: dict) -> list[str]:
 
 
 def _collect_proposals(
-    plan: dict, takes: list[dict], steps: list[dict], terms: list[str],
+    plan: dict, takes: list[dict], steps: list[dict],
+    procedure_terms: list[str], glossary_terms: list[str],
     prior: dict, confidence: float,
 ) -> list[dict]:
     """Suggest repairs only where the match is weak enough for one to matter.
+
+    The procedure goes first and a glossary suggestion covering the same span is
+    dropped. Both fired on the same misheard 抵扣布丁螺丝 in real footage: the
+    procedure proposed the correct 底壳固定螺丝 at 0.839 by pronunciation, while the
+    glossary proposed 进气口 at 0.875 — a higher score for a term that appears
+    nowhere in the procedure and so cannot match any step. Ordering by source also
+    stops glossary noise from consuming the per-take cap before the procedure is
+    considered at all.
 
     Already-decided entries are carried over even when they no longer regenerate:
     an accepted repair removes the misheard span it was found by, so dropping it
@@ -114,7 +124,17 @@ def _collect_proposals(
             continue
         key = _take_key(take)
         found_for_take = []
-        for suggestion in propose(label, terms):
+        claimed: list[tuple[int, int]] = []
+        ranked = [
+            (suggestion, source)
+            for source, terms in (("procedure", procedure_terms), ("glossary", glossary_terms))
+            for suggestion in propose(label, terms)
+        ]
+        for suggestion, source in ranked:
+            start = label.find(suggestion["found"])
+            end = start + len(suggestion["found"])
+            if source == "glossary" and any(start < stop and begin < end for begin, stop in claimed):
+                continue
             repaired = label.replace(suggestion["found"], suggestion["suggested"], 1)
             score, step = best_match(repaired, steps)
             resulting = step["id"] if step and score >= MATCH_THRESHOLD else None
@@ -122,10 +142,13 @@ def _collect_proposals(
             # however plausible it looks.
             if resulting == segment["wiki_step_id"]:
                 continue
+            if source == "procedure":
+                claimed.append((start, end))
             entry = {
                 "take": key,
                 "source_file": Path(take["source_file"]).name,
                 "spoken_label": label,
+                "source": source,
                 **suggestion,
                 "preview": repaired,
                 "current_step": segment["wiki_step_id"],
@@ -180,18 +203,25 @@ def run_project(
         raise ValueError("教程内容中未识别到操作步骤；请使用“步骤一、步骤二、步骤三”或有序编号。")
     _write_json(output / "wiki-steps.json", steps)
     takes, warnings = [], []
-    terms = load_terms(lexicon_file)
-    if lexicon_file and not terms:
-        warnings.append(f"词库不可用或没有长度达标的词条，已跳过术语纠错：{lexicon_file}")
-    # The procedure's own wording is the vocabulary matching depends on, so it leads.
-    review_terms = list(dict.fromkeys(terms_from_steps(steps) + terms))
+    glossary_terms = load_terms(lexicon_file)
+    if lexicon_file and not glossary_terms:
+        warnings.append(f"词库不可用或没有长度达标的词条，已跳过词库纠错：{lexicon_file}")
+    elif not lexicon_file:
+        warnings.append(
+            "未提供用户词库，这不影响运行：术语纠错的主要词汇来自教程步骤原文，"
+            "因为报幕念的通常就是原文。词库只是补充，用于原文里简写或未出现的术语。"
+        )
+    # The narration is the procedure read aloud, so the procedure's own wording is the
+    # primary vocabulary and the glossary only supplements it.
+    procedure_terms = terms_from_steps(steps)
+    vocabulary = list(dict.fromkeys(procedure_terms + glossary_terms))
     if reuse_takes and (output / "takes.json").exists():
         takes = json.loads((output / "takes.json").read_text(encoding="utf-8"))
     else:
         takes, notes = analyze_batch(
             discover_media(media_dir), mode, probe_media, model_name,
             language=language, workers=workers, batch_size=batch_size,
-            chunk_length=chunk_length, cpu_threads=cpu_threads, terms=terms,
+            chunk_length=chunk_length, cpu_threads=cpu_threads, terms=vocabulary,
         )
         warnings.extend(notes)
     if corrections_file:
@@ -205,16 +235,20 @@ def run_project(
     confirmed = _apply_decisions(takes, decisions)
     _write_json(output / "takes.json", takes)
     plan = build_edit_plan(steps, takes)
+    plan["skill_version"] = __version__
     plan["mode_requested"] = mode
     plan["corrections_file"] = str(Path(corrections_file).resolve()) if corrections_file else None
-    proposals = _collect_proposals(plan, takes, steps, review_terms, prior, review_confidence)
+    proposals = _collect_proposals(
+        plan, takes, steps, procedure_terms, glossary_terms, prior, review_confidence,
+    )
     pending = [item for item in proposals if item["decision"] == "pending"]
     _write_json(review_path, {
         "schema_version": "1.0",
         "instructions": REVIEW_INSTRUCTIONS,
         "pinyin_available": pinyin_available(),
         "review_confidence": review_confidence,
-        "vocabulary_terms": len(review_terms),
+        "procedure_terms": len(procedure_terms),
+        "glossary_terms": len(glossary_terms),
         "pending": len(pending),
         "accepted_applied": len(confirmed),
         "proposals": proposals,
@@ -225,8 +259,9 @@ def run_project(
         "chunk_length": chunk_length,
         "cpu_threads": cpu_threads or default_cpu_threads(),
         "lexicon_file": str(Path(lexicon_file).resolve()) if lexicon_file else None,
-        "lexicon_terms": len(terms),
-        "review_terms": len(review_terms),
+        "procedure_terms": len(procedure_terms),
+        "glossary_terms": len(glossary_terms),
+        "vocabulary_terms": len(vocabulary),
         "pinyin_available": pinyin_available(),
     }
     plan["lexicon_review"] = {
@@ -241,8 +276,11 @@ def run_project(
             f"有 {len(pending)} 条术语纠错待确认，尚未应用。请在 {REVIEW_FILE} 中把 decision "
             f"改为 accept 或 reject，然后加 --reuse-takes 重跑以生效。"
         )
-    if review_terms and not pinyin_available():
-        warnings.append("未安装 pypinyin，术语纠错只能比较字形；同音错字无法被发现。")
+    if vocabulary and not pinyin_available():
+        warnings.append(
+            "未安装 pypinyin：自动纠错已停用（只比字形无法区分“冷端风扇”和“热端风扇”，"
+            "误改风险高于收益），同音错字也无法被发现。请重新运行 setup 脚本安装。"
+        )
     plan["warnings"] = warnings
     if plan["unmarked_files"]:
         names = ", ".join(plan["unmarked_files"])
@@ -258,11 +296,13 @@ def run_project(
         if warning: warnings.append(warning)
     lines = [
         "# 粗剪审核报告", "",
+        f"- Skill 版本：{__version__}",
         f"- 素材片段：{len(plan['segments'])}",
         f"- 待确认/未匹配：{sum(s['status'] != 'matched' for s in plan['segments'])}",
         f"- 未拍摄教程步骤：{', '.join(plan['missing_step_ids']) or '无'}",
-        f"- 识别设置：语言 {language}，模型 {model_name}，并发 {workers}，批大小 {batch_size}，分块 {chunk_length}s，词库词条 {len(terms)}",
-        f"- 术语纠错：可用词汇 {len(review_terms)}，拼音比对 {'开启' if pinyin_available() else '未安装'}，待确认 {len(pending)}，已确认应用 {len(confirmed)}",
+        f"- 识别设置：语言 {language}，模型 {model_name}，并发 {workers}，批大小 {batch_size}，分块 {chunk_length}s",
+        f"- 纠错词汇：步骤原文 {len(procedure_terms)} 条（主）＋用户词库 {len(glossary_terms)} 条（补充）",
+        f"- 术语纠错：拼音比对 {'开启' if pinyin_available() else '未安装'}，待确认 {len(pending)}，已确认应用 {len(confirmed)}",
         "", "## 警告", "",
     ]
     lines += [f"- {w}" for w in warnings] or ["- 无"]
@@ -271,24 +311,30 @@ def run_project(
         for take in takes if take.get("lexicon_repairs")
     ]
     if repairs:
-        lines += ["", "## 词库纠错（已自动应用）", "", "以下报幕文本按词库术语做了替换，请核对是否符合实际操作：", ""]
+        lines += [
+            "", "## 术语纠错（已自动应用）", "",
+            "以下报幕文本被替换为已知术语。自动层只改写与已知正确术语不重叠、"
+            "且改动字发音相近的片段，请仍核对是否符合实际操作：", "",
+        ]
         for name, changes, raw, fixed in repairs:
             detail = "；".join(f"{c['found']} → {c['corrected']}（{c['score']}）" for c in changes)
             lines.append(f"- `{name}`：{raw} → {fixed}（{detail}）")
     if confirmed:
-        lines += ["", "## 词库纠错（人工已确认）", ""]
+        lines += ["", "## 术语纠错（人工已确认）", ""]
         lines += [f"- {note}" for note in confirmed]
     if pending:
         lines += [
             "", "## 待确认的术语纠错", "",
             f"以下 {len(pending)} 条由字形和拼音相似度提出，**尚未应用**。同音错字的字形相似度可能为 0，"
-            f"而发音相近的错误术语分数又可能更高，因此必须结合步骤原文判断。"
+            f"而发音相近的错误术语分数又可能更高，因此必须结合步骤原文判断。来源标记 `步骤原文` 的可信度"
+            f"通常高于 `词库`：只有教程里出现过的说法才可能匹配到步骤。"
             f"在 `{REVIEW_FILE}` 中把 decision 改成 accept 或 reject，再加 `--reuse-takes` 重跑即可生效。", "",
         ]
         for item in pending:
             target = item["resulting_step_text"] or "无匹配"
+            origin = "步骤原文" if item.get("source") == "procedure" else "词库"
             lines.append(
-                f"- `{item['source_file']}`：{item['found']} → {item['suggested']}"
+                f"- `{item['source_file']}`（{origin}）：{item['found']} → {item['suggested']}"
                 f"（字形 {item['char_score']}，拼音 {item['pinyin_score']}）"
                 f"；{item['spoken_label']} → {item['preview']}"
                 f"；步骤 {item['current_step'] or '未匹配'} → {item['resulting_step'] or '未匹配'}（{target}）"

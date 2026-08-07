@@ -55,6 +55,9 @@ if (-not (Test-Path -LiteralPath $Media)) { throw "Media folder is unreachable: 
 if ($FfmpegBin -and (Test-Path -LiteralPath $FfmpegBin)) { $env:PATH = "$FfmpegBin;$env:PATH" }
 New-Item -ItemType Directory -Force -Path $job, $output, $state | Out-Null
 
+$skillVersion = (& $python $cli --version | Out-String).Trim()
+Write-Host "rough-cut-wiki-video v$skillVersion" -ForegroundColor Green
+
 $wikiPath = Join-Path $job 'wiki.md'
 if ($WikiFile) {
     Copy-Item -LiteralPath $WikiFile -Destination $wikiPath -Force
@@ -81,7 +84,16 @@ $runArgs = @(
     '--chunk-length', $ChunkLength
 )
 if ($CpuThreads -gt 0) { $runArgs += @('--cpu-threads', $CpuThreads) }
-if ($Lexicon -and (Test-Path -LiteralPath $Lexicon)) { $runArgs += @('--lexicon', $Lexicon) }
+if ($Lexicon -and (Test-Path -LiteralPath $Lexicon)) {
+    $runArgs += @('--lexicon', $Lexicon)
+    Write-Host "User glossary: $Lexicon" -ForegroundColor DarkGray
+} elseif ($Lexicon) {
+    Write-Warning "The user glossary was not found: $Lexicon. The job continues on the procedure's own vocabulary."
+} else {
+    Write-Host "No user glossary supplied, which is fine: term repair works mainly from the" -ForegroundColor DarkGray
+    Write-Host "procedure's own wording, because the narration is usually the procedure read aloud." -ForegroundColor DarkGray
+    Write-Host '  Optional: -Lexicon with one UTF-8 term per line adds wording the procedure omits.' -ForegroundColor DarkGray
+}
 $corrections = Join-Path $job 'corrections.json'
 if (Test-Path -LiteralPath $corrections) { $runArgs += @('--corrections', $corrections) }
 if ($ReuseTakes) { $runArgs += '--reuse-takes' }

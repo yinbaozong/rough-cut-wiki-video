@@ -1,4 +1,4 @@
-"""Post-recognition term repair against a user-supplied glossary.
+"""Post-recognition term repair, driven mainly by the procedure's own wording.
 
 Hotwords cannot carry a real glossary: faster-whisper truncates them at
 ``max_length // 2 - 1`` (223) tokens, which silently drops everything past the
@@ -10,7 +10,13 @@ Two bands exist, because character similarity and pronunciation similarity fail
 in opposite ways:
 
 ``repair`` is the automatic band. It only rewrites spans that are already close
-character-for-character, which is safe enough to apply unattended.
+character-for-character, and it never touches a span overlapping a term the text
+already spells correctly. That guard is what makes the band safe to apply
+unattended: without it, a real 530-term glossary containing 77 pairs of
+near-identical terms rewrote 更换冷端风扇 into its opposite 更换热端风扇, slid a
+window across correct text to produce 检主热端风扇, and — once the procedure was
+added as vocabulary — flipped 安装底壳固定螺丝 to 移除底壳固定螺丝, which would
+have sent the take to the wrong step.
 
 ``propose`` is the reviewed band, and it adds pronunciation comparison. Whisper's
 Chinese mistakes are overwhelmingly homophones, which character distance cannot
@@ -19,7 +25,9 @@ see at all: on real footage 抵扣布丁 for 底壳固定 scores 0.00 by charact
 热端风扇/冷端风扇 reach 0.87 and the wrong-but-plausible 紧抵扣/进气口 reaches
 0.88 — higher than the correct repair. No threshold separates them, so proposals
 are never applied automatically; they are handed to an agent that can weigh them
-against the procedure text.
+against the procedure text. This band stays deliberately permissive, anchor guard
+included, because a reviewer can reject a bad suggestion but cannot recover one
+that was never offered.
 """
 
 from __future__ import annotations
@@ -39,6 +47,13 @@ DEFAULT_THRESHOLD = 0.75
 # homophone scores near zero on characters and a typo scores low on pinyin.
 PROPOSE_CHAR_THRESHOLD = 0.60
 PROPOSE_PINYIN_THRESHOLD = 0.70
+# The automatic band additionally requires the characters it would change to be
+# plausibly misheard. Separating 山/扇 (shan/shan) from 冷/热 (leng/re) is what
+# distinguishes a real mishearing from a different word that merely looks close.
+# Measured on a 530-term glossary: this rejects all 77 pairs of distinct valid
+# terms that character similarity alone would have let through, while keeping the
+# homophone substitutions that are genuine mishearings.
+AUTO_SOUND_THRESHOLD = 0.7
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
@@ -130,13 +145,60 @@ def _candidates(text: str, terms: list[str]) -> list[tuple[float, int, int, str,
     return hits
 
 
+def _sound_plausible(found: str, term: str, threshold: float = AUTO_SOUND_THRESHOLD) -> bool:
+    """Could a speaker saying ``term`` be transcribed as ``found``?
+
+    Only the characters that differ are compared, because the shared ones carry no
+    information about the substitution. On equal-length spans this is decisive:
+    the genuine 山 for 扇 are the same syllable, while the opposites 冷 and 热 share
+    nothing, even though both differ from their term by exactly one character and so
+    score identically at 0.75 on characters.
+    """
+    if len(found) == len(term):
+        changed = [(a, b) for a, b in zip(found, term) if a != b]
+        return all(
+            SequenceMatcher(None, _sound(a), _sound(b)).ratio() >= threshold
+            for a, b in changed
+        )
+    # Differing lengths shift the alignment, so compare the spans as a whole.
+    return SequenceMatcher(None, _sound(found), _sound(term)).ratio() >= threshold
+
+
+def _anchored_spans(text: str, terms: list[str]) -> list[tuple[int, int]]:
+    """Spans the text already spells as a known term, which must be left alone.
+
+    Every observed false repair overlapped one of these: the vocabulary's own
+    near-neighbours are similar enough to pass any character threshold, so
+    correctly transcribed text was the most likely thing to be rewritten.
+    """
+    spans: list[tuple[int, int]] = []
+    for term in terms:
+        if len(term) < MIN_TERM_LENGTH:
+            continue
+        start = text.find(term)
+        while start >= 0:
+            spans.append((start, start + len(term)))
+            start = text.find(term, start + 1)
+    return spans
+
+
 def repair(text: str | None, terms: list[str]) -> tuple[str | None, list[dict]]:
-    """Replace misheard spans with glossary terms; never insert or delete text."""
+    """Replace misheard spans with known terms; never insert or delete text."""
     if not text or not terms:
         return text, []
+    if not pinyin_available():
+        # Character similarity alone cannot tell 冷端风扇 from 热端风扇, so without
+        # pronunciation checking nothing here is safe to apply unattended. Suggestions
+        # still reach the reviewed band, which is where a human can judge them.
+        return text, []
+    anchors = _anchored_spans(text, terms)
     taken: list[tuple[int, int]] = []
     applied: list[dict] = []
     for score, start, end, found, term in _candidates(text, terms):
+        if any(start < stop and begin < end for begin, stop in anchors):
+            continue
+        if not _sound_plausible(found, term):
+            continue
         if any(start < stop and begin < end for begin, stop in taken):
             continue
         taken.append((start, end))
